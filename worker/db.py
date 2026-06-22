@@ -227,6 +227,21 @@ def load_bars_since(conn, coin_id: int, timeframe: str, ts) -> list:
         return [(t, float(h), float(l)) for (t, h, l) in cur.fetchall()]
 
 
+def load_latest_funding(conn) -> list:
+    """[(symbol, funding_rate, ts)] — senaste derivatsnapshot per coin."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.symbol, d.funding_rate, d.ts
+            FROM derivatives d
+            JOIN coins c ON c.id = d.coin_id
+            JOIN (SELECT coin_id, max(ts) AS mt FROM derivatives GROUP BY coin_id) latest
+              ON latest.coin_id = d.coin_id AND latest.mt = d.ts
+            """
+        )
+        return [(sym, float(fr) if fr is not None else None, ts) for sym, fr, ts in cur.fetchall()]
+
+
 def insert_outcome(conn, signal_id: int, outcome: str, realized_rr, closed_at) -> None:
     with conn.cursor() as cur:
         cur.execute(

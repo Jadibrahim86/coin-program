@@ -3,7 +3,7 @@ name: coin-signals
 # Kör hjärnan i molnet — ingen av dina enheter behöver vara på.
 on:
   schedule:
-    - cron: "5 */4 * * *"   # var 4:e timme (UTC), ~5 min efter att 4h-baren stängt
+    - cron: "5 * * * *"     # varje timme (UTC), ~5 min efter att 1h-baren stängt
   workflow_dispatch: {}       # tillåter manuell körning från Actions-fliken
 
 concurrency:
@@ -35,4 +35,4 @@ jobs:
         run: python worker/cli.py ingest-ohlcv
 
       - name: Marknads-radar + Telegram (bevakning, ej råd)
-        run: python worker/cli.py radar --timeframe 4h
+        run: python worker/cli.py radar --timeframe 1h
