@@ -30,16 +30,17 @@ def _slice_metrics(equity, trades, timeframe):
     return out
 
 
-def run(conn, timeframe: str = "4h") -> None:
+def run(conn, timeframe: str = "4h", allow_short: bool = True) -> None:
     raw = load_from_db(conn, timeframe)
     signaled = {s: signals.generate(df) for s, df in raw.items() if len(df) >= MIN_BARS}
-    print(f"Validerar {len(signaled)} coins på {timeframe}.\n")
+    mode = "long+short" if allow_short else "LONG-ONLY (inga shorts)"
+    print(f"Validerar {len(signaled)} coins på {timeframe}.  Läge: {mode}\n")
 
     # ---- 1) Hävstångseffekt -------------------------------------------------
     print("=== 1) Hävstångseffekt (portfölj-gross-tak) ===")
     print("  Gammalt 'resultat' lät 5 korrelerade positioner = ~5x brutto. Realistiskt = 1.0.")
     for gross in (5.0, 2.0, 1.0):
-        cfg = backtest_engine.BacktestConfig(max_gross_exposure=gross)
+        cfg = backtest_engine.BacktestConfig(max_gross_exposure=gross, allow_short=allow_short)
         eq, tr = backtest_engine.run(signaled, cfg)
         m = metrics.compute(eq, tr, timeframe)
         print(f"  max_gross={gross:>3}:  return {m['total_return']*100:>9.0f}%  "
@@ -47,7 +48,7 @@ def run(conn, timeframe: str = "4h") -> None:
               f"trades {m['num_trades']}")
 
     # Realistiskt tak för resten av valideringen.
-    cfg = backtest_engine.BacktestConfig(max_gross_exposure=1.0)
+    cfg = backtest_engine.BacktestConfig(max_gross_exposure=1.0, allow_short=allow_short)
     eq, tr = backtest_engine.run(signaled, cfg)
 
     # ---- 2) Per år vs baselines --------------------------------------------
@@ -69,7 +70,8 @@ def run(conn, timeframe: str = "4h") -> None:
     print("  Edgen är tunn (PF ~1.1) → känslig för sämre fills. x1 = antagna 0.05%/0.05%.")
     for mult in (1, 2, 3):
         cfg2 = backtest_engine.BacktestConfig(
-            max_gross_exposure=1.0, fee_pct=0.0005 * mult, slippage_pct=0.0005 * mult
+            max_gross_exposure=1.0, fee_pct=0.0005 * mult, slippage_pct=0.0005 * mult,
+            allow_short=allow_short,
         )
         eq2, tr2 = backtest_engine.run(signaled, cfg2)
         m2 = metrics.compute(eq2, tr2, timeframe)

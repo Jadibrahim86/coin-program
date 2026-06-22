@@ -75,9 +75,13 @@ def main() -> None:
     p_sig = sub.add_parser("generate-signals", help="Beräkna & spara AKTUELLA setups (EJ VALIDERAD)")
     p_sig.add_argument("--timeframe", default="4h")
 
-    p_cyc = sub.add_parser("cycle", help="Köp→sälj-livscykel (long-only) + alerts — den schemalagda pulsen")
+    p_cyc = sub.add_parser("cycle", help="Köp→sälj-livscykel (long-only) + alerts")
     p_cyc.add_argument("--timeframe", default="4h")
     p_cyc.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
+
+    p_rad = sub.add_parser("radar", help="Marknads-radar: flagga ovanliga förhållanden (bevakning, ej råd)")
+    p_rad.add_argument("--timeframe", default="4h")
+    p_rad.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
 
     p_bt = sub.add_parser("backtest", help="Kör backtesten mot baseline (grinden)")
     p_bt.add_argument("--timeframe", default="4h")
@@ -87,6 +91,7 @@ def main() -> None:
 
     p_val = sub.add_parser("validate", help="Valideringssvit: hävstång, per-år, kostnadskänslighet")
     p_val.add_argument("--timeframe", default="4h")
+    p_val.add_argument("--long-only", action="store_true", help="Validera long-only (inga shorts)")
 
     sub.add_parser("telegram-chatid", help="Hitta ditt Telegram chat_id (skriv till boten först)")
     sub.add_parser("alert", help="Skicka senaste signaler till Telegram")
@@ -133,9 +138,12 @@ def main() -> None:
         elif args.cmd == "cycle":
             import positions
             positions.run(conn, args.timeframe, send=not args.no_send)
+        elif args.cmd == "radar":
+            import scout
+            scout.run(conn, args.timeframe, send=not args.no_send)
         elif args.cmd == "validate":
             import validate
-            validate.run(conn, args.timeframe)
+            validate.run(conn, args.timeframe, allow_short=not args.long_only)
         elif args.cmd == "backtest":
             import backtest_run
             backtest_run.run_backtest(

@@ -34,5 +34,5 @@ jobs:
       - name: Hämta senaste OHLCV (inkrementellt)
         run: python worker/cli.py ingest-ohlcv
 
-      - name: Köp/sälj-cykel + Telegram-alerts
-        run: python worker/cli.py cycle --timeframe 4h
+      - name: Marknads-radar + Telegram (bevakning, ej råd)
+        run: python worker/cli.py radar --timeframe 4h

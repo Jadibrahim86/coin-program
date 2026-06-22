@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pandas as pd
 
-BARS_PER_YEAR = {"1h": 24 * 365, "4h": 6 * 365, "1d": 365}
+BARS_PER_YEAR = {"5m": 105120, "15m": 35040, "1h": 24 * 365, "4h": 6 * 365, "1d": 365}
 
 
 def _max_drawdown(equity: pd.Series) -> float:

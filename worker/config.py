@@ -17,7 +17,7 @@ OHLCV_EXCHANGE = os.environ.get("OHLCV_EXCHANGE", "binance")
 
 # Timeframes vi lagrar (CCXT-notation).
 TIMEFRAMES = ["1h", "4h", "1d"]
-TIMEFRAME_SECONDS = {"1h": 3600, "4h": 14400, "1d": 86400}
+TIMEFRAME_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 
 # Hur långt bak vi backfillar vid första körningen.
 BACKFILL_START = os.environ.get("BACKFILL_START", "2021-01-01T00:00:00Z")
