@@ -1,0 +1,38 @@
+name: coin-signals
+
+# Kör hjärnan i molnet — ingen av dina enheter behöver vara på.
+on:
+  schedule:
+    - cron: "5 */4 * * *"   # var 4:e timme (UTC), ~5 min efter att 4h-baren stängt
+  workflow_dispatch: {}       # tillåter manuell körning från Actions-fliken
+
+concurrency:
+  group: coin-signals
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      # Byt vid behov om Binance geo-blockar CI (se DEPLOY.md), t.ex. "kraken" eller "bybit":
+      OHLCV_EXCHANGE: ${{ vars.OHLCV_EXCHANGE || 'binance' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: worker/requirements.txt
+
+      - name: Installera beroenden
+        run: pip install -r worker/requirements.txt
+
+      - name: Hämta senaste OHLCV (inkrementellt)
+        run: python worker/cli.py ingest-ohlcv
+
+      - name: Köp/sälj-cykel + Telegram-alerts
+        run: python worker/cli.py cycle --timeframe 4h
