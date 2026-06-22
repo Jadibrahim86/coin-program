@@ -10,3 +10,9 @@ venv/
 
 # Logs / data dumps
 *.log
+
+# Skärmbilder / bilder
+*.png
+*.jpg
+*.jpeg
+Skärmbild*

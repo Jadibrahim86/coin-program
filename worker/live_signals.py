@@ -30,6 +30,17 @@ def _last_closed_idx(df, timeframe: str) -> int:
     return -1
 
 
+STALE_MAX_BARS = 3  # data räknas inaktuell om senaste baren är äldre än så här många bars
+
+
+def _is_stale(df, timeframe: str) -> bool:
+    """True om datakällan släpar (eller saknar coinen) → signalera inte på gammalt pris."""
+    secs = config.TIMEFRAME_SECONDS[timeframe]
+    last_open = df.index[-1].to_pydatetime().timestamp()
+    age = datetime.now(timezone.utc).timestamp() - last_open
+    return age > STALE_MAX_BARS * secs
+
+
 def _confidence(row, direction: int, daily_trend: int) -> float:
     """0–100: blend av RSI-styrka, volymbekräftelse och daily-trend-överens (MTF)."""
     rsi = row["rsi"]

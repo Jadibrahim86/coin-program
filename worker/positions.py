@@ -14,7 +14,10 @@ import alerts
 import config
 import db
 import features
-from live_signals import MIN_BARS, RR_TARGET, K_ATR_STOP, _confidence, _last_closed_idx, _regime
+from live_signals import (
+    MIN_BARS, RR_TARGET, K_ATR_STOP,
+    _confidence, _is_stale, _last_closed_idx, _regime,
+)
 
 BUY_MIN_CONF = 50.0  # alerta bara hyfsade setups → färre, bättre trades (cost-medvetet)
 
@@ -22,8 +25,8 @@ BUY_MIN_CONF = 50.0  # alerta bara hyfsade setups → färre, bättre trades (co
 def _long_candidate(conn, coin, cid: int, timeframe: str):
     """Long-setup på senast stängda baren, eller None. Bara LONG."""
     df = db.load_ohlcv_df(conn, cid, timeframe)
-    if len(df) < MIN_BARS:
-        return None
+    if len(df) < MIN_BARS or _is_stale(df, timeframe):
+        return None  # för lite data, ELLER inaktuell (t.ex. coin som molnbörsen saknar)
     f = features.compute(df)
     idx = _last_closed_idx(df, timeframe)
     last = f.iloc[idx]
