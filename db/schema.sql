@@ -114,6 +114,15 @@ create table if not exists weights (
     unique (signal_family, regime)
 );
 
+-- Radar-dedup: minns vad som flaggats så samma sak inte upprepas varje timme.
+create table if not exists radar_alerts (
+    id        bigint generated always as identity primary key,
+    coin_id   bigint not null references coins(id) on delete cascade,
+    flag_type text not null,                          -- 'accumulation' | 'distribution'
+    ts        timestamptz not null default now()
+);
+create index if not exists idx_radar_alerts_ts on radar_alerts (ts);
+
 -- Backtest-körningar med nyckeltal OCH baseline-nyckeltal (§7.2).
 create table if not exists backtest_runs (
     id               bigint generated always as identity primary key,

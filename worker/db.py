@@ -227,6 +227,25 @@ def load_bars_since(conn, coin_id: int, timeframe: str, ts) -> list:
         return [(t, float(h), float(l)) for (t, h, l) in cur.fetchall()]
 
 
+def recent_radar_alerts(conn, within_hours: int) -> set:
+    """{(coin_id, flag_type)} som flaggats inom fönstret — för dedup."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT coin_id, flag_type FROM radar_alerts WHERE ts > now() - make_interval(hours => %s)",
+            (within_hours,),
+        )
+        return {(cid, ft) for cid, ft in cur.fetchall()}
+
+
+def record_radar_alerts(conn, rows) -> None:
+    """rows: [(coin_id, flag_type), ...]."""
+    if not rows:
+        return
+    with conn.cursor() as cur:
+        execute_values(cur, "INSERT INTO radar_alerts (coin_id, flag_type) VALUES %s", rows)
+    conn.commit()
+
+
 def load_latest_funding(conn) -> list:
     """[(symbol, funding_rate, ts)] — senaste derivatsnapshot per coin."""
     with conn.cursor() as cur:
