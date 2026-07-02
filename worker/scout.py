@@ -98,7 +98,9 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
     for k in buckets:
         buckets[k] = sorted((s for s in buckets[k] if (s["cid"], k) not in recent),
                             key=lambda s: -s["vol_ratio"])
-    funding = _funding_flags(conn)
+    # Dedup funding också — kronisk extrem funding (t.ex. INJ) ska inte upprepas varje timme.
+    funding = [(sym, fr) for sym, fr in _funding_flags(conn)
+               if (coin_ids.get(sym), "funding") not in recent]
 
     if not (any(buckets.values()) or funding):
         print("Inget nytt över trösklarna — inget skickat.")
@@ -121,5 +123,9 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
     print(text)
     if send:
         alerts.send(text)
-        db.record_radar_alerts(conn, [(s["cid"], k) for k in buckets for s in buckets[k]])
+        db.record_radar_alerts(
+            conn,
+            [(s["cid"], k) for k in buckets for s in buckets[k]]
+            + [(coin_ids[sym], "funding") for sym, _ in funding if sym in coin_ids],
+        )
         print("\n[skickat + flaggor registrerade för dedup]")
