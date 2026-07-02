@@ -32,7 +32,7 @@ Skapa tre stycken (samma värden som i din `.env`):
 |---|---|
 | `DATABASE_URL` | din Supabase Session-pooler-sträng |
 | `TELEGRAM_BOT_TOKEN` | din BotFather-token |
-| `TELEGRAM_CHAT_ID` | `1864441006` |
+| `TELEGRAM_CHAT_ID` | ditt chat_id (samma som i din `.env`) |
 
 ### 4. Testa
 - Fliken **Actions** → välj **coin-signals** → **Run workflow** (manuell körning).

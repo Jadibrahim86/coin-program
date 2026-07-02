@@ -38,9 +38,9 @@ nano .env
 ```
 Klistra in:
 ```
-DATABASE_URL=postgresql://postgres.jfewsocrnnnznhahxacs:DITT-LÖSENORD@aws-1-eu-central-1.pooler.supabase.com:5432/postgres
-TELEGRAM_BOT_TOKEN=din-token
-TELEGRAM_CHAT_ID=1864441006
+DATABASE_URL=<samma som i din lokala .env>
+TELEGRAM_BOT_TOKEN=<samma som i din lokala .env>
+TELEGRAM_CHAT_ID=<samma som i din lokala .env>
 ```
 Spara (Ctrl+O, Enter, Ctrl+X). `OHLCV_EXCHANGE` lämnas bort → blir `binance` (alla 18 coins).
 
