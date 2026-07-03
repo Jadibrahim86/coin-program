@@ -1,5 +1,9 @@
 # Molnautomatik — kör hjärnan utan att din dator är på
 
+> **OBS: Ersatt av VPS:en (se [DEPLOY_VPS.md](DEPLOY_VPS.md)).** GitHub Actions-workflowen
+> är borttagen ur repot — den orsakade dubbla alerts och kan förorena volymdatan (Kraken ≠
+> Binance-volym). Guiden nedan sparas som referens om GitHub-vägen någonsin behövs igen.
+
 Hjärnan körs i **GitHub Actions** (gratis) enligt schema. Då behöver varken din dator
 eller någon assistent vara igång — molnet hämtar data, räknar köp/sälj och pingar din
 Telegram. Schemat ligger i [.github/workflows/signals.yml](.github/workflows/signals.yml)

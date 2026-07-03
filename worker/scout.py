@@ -29,6 +29,7 @@ OVEREXTENDED = 0.20      # hoppa 🟢 om redan upp >20% på 5d (för sent)
 FUNDING_EXTREME = 0.0003
 FUNDING_MAX_AGE_H = 6
 DEDUP_HOURS = 8
+FUNDING_DEDUP_HOURS = 24  # kronisk extrem funding (t.ex. INJ) → max en alert per dygn
 
 BARS_PER_DAY = {"5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 
@@ -98,9 +99,11 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
     for k in buckets:
         buckets[k] = sorted((s for s in buckets[k] if (s["cid"], k) not in recent),
                             key=lambda s: -s["vol_ratio"])
-    # Dedup funding också — kronisk extrem funding (t.ex. INJ) ska inte upprepas varje timme.
+    # Dedup funding med eget, längre fönster — kronisk extrem funding (t.ex. INJ)
+    # ska inte upprepas varje timme, max en gång per dygn.
+    recent_funding = db.recent_radar_alerts(conn, FUNDING_DEDUP_HOURS)
     funding = [(sym, fr) for sym, fr in _funding_flags(conn)
-               if (coin_ids.get(sym), "funding") not in recent]
+               if (coin_ids.get(sym), "funding") not in recent_funding]
 
     if not (any(buckets.values()) or funding):
         print("Inget nytt över trösklarna — inget skickat.")
