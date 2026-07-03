@@ -114,6 +114,27 @@ create table if not exists weights (
     unique (signal_family, regime)
 );
 
+-- Dina bevakade innehav (skapas via Telegram: /buy SOL 82). Exit-vakten larmar
+-- vid stop / vikande topp / säljvolym. Skapas automatiskt av koden vid behov.
+create table if not exists holdings (
+    id             bigint generated always as identity primary key,
+    coin_id        bigint not null references coins(id),
+    entry_price    numeric not null,
+    stop_price     numeric,
+    high_water     numeric,                          -- högsta close sedan köp
+    trail_alert_at numeric,                          -- toppen vid senaste trail-larm (åter-aktivering)
+    stop_alerted   boolean not null default false,
+    opened_at      timestamptz not null default now(),
+    closed_at      timestamptz,
+    exit_price     numeric
+);
+
+-- Telegram-botens tillstånd (getUpdates-offset m.m.).
+create table if not exists bot_state (
+    key   text primary key,
+    value text not null
+);
+
 -- Radar-dedup: minns vad som flaggats så samma sak inte upprepas varje timme.
 create table if not exists radar_alerts (
     id        bigint generated always as identity primary key,

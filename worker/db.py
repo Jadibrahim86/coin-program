@@ -227,6 +227,123 @@ def load_bars_since(conn, coin_id: int, timeframe: str, ts) -> list:
         return [(t, float(h), float(l)) for (t, h, l) in cur.fetchall()]
 
 
+def ensure_exit_tables(conn) -> None:
+    """Skapar holdings + bot_state om de saknas (körs av bot + exit-watch vid start)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            create table if not exists holdings (
+                id             bigint generated always as identity primary key,
+                coin_id        bigint not null references coins(id),
+                entry_price    numeric not null,
+                stop_price     numeric,
+                high_water     numeric,
+                trail_alert_at numeric,
+                stop_alerted   boolean not null default false,
+                opened_at      timestamptz not null default now(),
+                closed_at      timestamptz,
+                exit_price     numeric
+            );
+            create table if not exists bot_state (
+                key   text primary key,
+                value text not null
+            );
+            """
+        )
+    conn.commit()
+
+
+def get_bot_state(conn, key: str, default=None):
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM bot_state WHERE key = %s", (key,))
+        row = cur.fetchone()
+        return row[0] if row else default
+
+
+def set_bot_state(conn, key: str, value: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO bot_state (key, value) VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            (key, value),
+        )
+    conn.commit()
+
+
+def get_open_holding(conn, coin_id: int):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM holdings WHERE coin_id = %s AND closed_at IS NULL", (coin_id,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def insert_holding(conn, coin_id: int, entry_price: float, stop_price: float) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO holdings (coin_id, entry_price, stop_price, high_water)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (coin_id, entry_price, stop_price, entry_price),
+        )
+    conn.commit()
+
+
+def load_open_holdings(conn) -> list:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT h.id, h.coin_id, c.symbol, h.entry_price, h.stop_price,
+                   h.high_water, h.trail_alert_at, h.stop_alerted, h.opened_at
+            FROM holdings h JOIN coins c ON c.id = h.coin_id
+            WHERE h.closed_at IS NULL ORDER BY h.opened_at
+            """
+        )
+        out = []
+        for hid, cid, sym, entry, stop, hw, ta, sa, ot in cur.fetchall():
+            out.append({
+                "id": hid, "coin_id": cid, "symbol": sym,
+                "entry": float(entry), "stop": float(stop) if stop is not None else None,
+                "high_water": float(hw) if hw is not None else float(entry),
+                "trail_alert_at": float(ta) if ta is not None else None,
+                "stop_alerted": sa, "opened_at": ot,
+            })
+        return out
+
+
+def update_holding(conn, holding_id: int, **fields) -> None:
+    cols = ", ".join(f"{k} = %s" for k in fields)
+    with conn.cursor() as cur:
+        cur.execute(f"UPDATE holdings SET {cols} WHERE id = %s", (*fields.values(), holding_id))
+    conn.commit()
+
+
+def close_holding(conn, holding_id: int, exit_price) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE holdings SET closed_at = now(), exit_price = %s WHERE id = %s",
+            (exit_price, holding_id),
+        )
+    conn.commit()
+
+
+def get_last_close(conn, coin_id: int, timeframe: str = "1h"):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT close FROM ohlcv WHERE coin_id = %s AND timeframe = %s
+            ORDER BY ts DESC LIMIT 1
+            """,
+            (coin_id, timeframe),
+        )
+        row = cur.fetchone()
+        return float(row[0]) if row else None
+
+
 def recent_radar_alerts(conn, within_hours: int) -> set:
     """{(coin_id, flag_type)} som flaggats inom fönstret — för dedup."""
     with conn.cursor() as cur:

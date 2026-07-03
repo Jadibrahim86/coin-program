@@ -8,3 +8,7 @@ source .venv/bin/activate
 python worker/cli.py ingest-ohlcv
 python worker/cli.py ingest-oi
 python worker/cli.py radar --timeframe 1h
+python worker/cli.py exit-watch
+
+# Starta om kommando-boten så den plockar upp ny kod efter git pull (ofarligt om ej installerad).
+systemctl try-restart coin-bot 2>/dev/null || true

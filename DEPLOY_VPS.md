@@ -64,6 +64,22 @@ Klart — VPS:en kör nu radarn varje timme med alla 18 coins + funding, dygnet 
 hämtar 15m-data och kör radarn på 15m. Säg till så lägger jag till det — VPS:en har inga
 frekvensgränser som GitHub.
 
+## Telegram-boten (/buy /sell /positions) — engångsinstallation
+
+Kommandolyssnaren körs som systemd-tjänst så att /buy får svar direkt:
+```bash
+cd ~/coin-program
+cp coin-bot.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now coin-bot
+systemctl status coin-bot --no-pager
+```
+Status ska visa **active (running)**. Testa sen i Telegram: skriv `/help` till boten.
+
+- Tjänsten startas om automatiskt varje timme (via run_pipeline.sh) så den plockar
+  upp ny kod efter git pull.
+- Loggar: `journalctl -u coin-bot -n 50 --no-pager`
+
 ## Felsökning
 - Inga alerts? Kolla `cat cron.log`. Tyst = inget korsade trösklarna (normalt).
 - Binance-fel? Kontrollera att VPS:en är i EU (inte US-region).

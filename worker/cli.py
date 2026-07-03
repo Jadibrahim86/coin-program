@@ -80,8 +80,12 @@ def main() -> None:
     p_cyc.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
 
     p_rad = sub.add_parser("radar", help="Marknads-radar: flagga ovanliga förhållanden (bevakning, ej råd)")
-    p_rad.add_argument("--timeframe", default="4h")
+    p_rad.add_argument("--timeframe", default="1h")
     p_rad.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
+
+    p_ew = sub.add_parser("exit-watch", help="Kolla bevakade innehav: stop / vikande topp / säljvolym")
+    p_ew.add_argument("--timeframe", default="1h")
+    p_ew.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
 
     p_bt = sub.add_parser("backtest", help="Kör backtesten mot baseline (grinden)")
     p_bt.add_argument("--timeframe", default="4h")
@@ -141,6 +145,9 @@ def main() -> None:
         elif args.cmd == "radar":
             import scout
             scout.run(conn, args.timeframe, send=not args.no_send)
+        elif args.cmd == "exit-watch":
+            import exit_watch
+            exit_watch.run(conn, args.timeframe, send=not args.no_send)
         elif args.cmd == "validate":
             import validate
             validate.run(conn, args.timeframe, allow_short=not args.long_only)

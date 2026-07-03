@@ -1,0 +1,13 @@
+[Unit]
+Description=Coin Telegram-bot (/buy /sell /positions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/coin-program
+ExecStart=/root/coin-program/.venv/bin/python worker/telegram_bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
