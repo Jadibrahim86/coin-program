@@ -331,6 +331,19 @@ def close_holding(conn, holding_id: int, exit_price) -> None:
     conn.commit()
 
 
+def load_recent_closes(conn, coin_id: int, timeframe: str = "1h", n: int = 240) -> list:
+    """Senaste n stängningskurser, äldst först (lätt fråga för volatilitetsberäkning)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT close FROM ohlcv WHERE coin_id = %s AND timeframe = %s
+            ORDER BY ts DESC LIMIT %s
+            """,
+            (coin_id, timeframe, n),
+        )
+        return [float(r[0]) for r in cur.fetchall()][::-1]
+
+
 def get_last_close(conn, coin_id: int, timeframe: str = "1h"):
     with conn.cursor() as cur:
         cur.execute(

@@ -16,3 +16,6 @@ venv/
 *.jpg
 *.jpeg
 Skärmbild*
+
+# Claude Code personliga inställningar
+.claude/settings.local.json

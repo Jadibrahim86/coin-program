@@ -72,7 +72,7 @@ UNIVERSE = [
     Coin("INJ",  "Injective",  "DeFi",   "injective-protocol",       "INJ/USDT",  "INJ/USDT:USDT"),
     Coin("LTC",  "Litecoin",   "payments","litecoin",                "LTC/USDT",  "LTC/USDT:USDT"),
     Coin("UNI",  "Uniswap",    "DeFi",   "uniswap",                  "UNI/USDT",  "UNI/USDT:USDT"),
-    Coin("AAVE", "Aave",       "DeFi",   "aave",                     "AAVE/USDT", "AAVE/USDT:USDT"),
+    # AAVE borttagen 2026-07-19: "Uncomfortable" på halal-listan (rank 58).
     # Utökning 2026-07-19: halal-godkända (PiF "Comfortable") med OKX-stöd.
     # Exkluderat: memecoins (DOGE/SHIB), guld (XAUT/PAXG), stables/wrappers,
     # samt DEL/XMR/TON/DEXE/XDC/FTM som saknas på OKX.
@@ -86,4 +86,15 @@ UNIVERSE = [
     Coin("TAO",  "Bittensor",    "AI",       "bittensor",            "TAO/USDT",  "TAO/USDT:USDT"),
     Coin("RAY",  "Raydium",      "DeFi",     "raydium",              "RAY/USDT",  "RAY/USDT:USDT"),
     Coin("LEO",  "UNUS SED LEO", "exchange", "leo-token",            "LEO/USDT",  None),
+    # Utökning 2026-07-19 del 2: halal-gröna från rank 51–100 med OKX-stöd och
+    # dagsvol >= ~2.7% (volatila men etablerade). Skippat: RENDER/ALGO/ETC/OKB/FLR
+    # (för lugna för swing), QNT (ingen spot), HTX/MNT/KAS/GT/BGB/KCS/BDX (ej på OKX),
+    # PEPE (memecoin-regeln).
+    Coin("WLD",  "Worldcoin",    "identity", "worldcoin-wld",            "WLD/USDT", "WLD/USDT:USDT"),
+    Coin("JUP",  "Jupiter",      "DeFi",     "jupiter-exchange-solana",  "JUP/USDT", "JUP/USDT:USDT"),
+    Coin("SNX",  "Synthetix",    "DeFi",     "havven",                   "SNX/USDT", "SNX/USDT:USDT"),
+    Coin("APT",  "Aptos",        "L1",       "aptos",                    "APT/USDT", "APT/USDT:USDT"),
+    Coin("CHZ",  "Chiliz",       "fan",      "chiliz",                   "CHZ/USDT", "CHZ/USDT:USDT"),
+    Coin("ICP",  "Internet Computer", "L1",  "internet-computer",        "ICP/USDT", "ICP/USDT:USDT"),
+    Coin("FIL",  "Filecoin",     "storage",  "filecoin",                 "FIL/USDT", "FIL/USDT:USDT"),
 ]
