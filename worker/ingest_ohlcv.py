@@ -52,6 +52,10 @@ def ingest_one(conn, exchange, coin, coin_id: int, timeframe: str) -> int:
         since_ms = int(last_ts.timestamp() * 1000) + _interval_ms(timeframe)
 
     bars = fetch_ohlcv(exchange, coin.spot, timeframe, since_ms)
+    if not bars and last_ts is None:
+        # Vissa börser (OKX) svarar tomt när `since` ligger före tillgänglig historik
+        # (nylistade coins) — hämta då senaste tillgängliga fönstret istället.
+        bars = exchange.fetch_ohlcv(coin.spot, timeframe, limit=1000)
     if not bars:
         return 0
 
