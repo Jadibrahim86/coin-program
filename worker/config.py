@@ -12,15 +12,22 @@ load_dotenv()
 # Postgres-anslutning (Supabase -> Project Settings -> Database -> Connection string).
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Primär börs för OHLCV (CCXT-id). Binance har bredast/längst historik.
-OHLCV_EXCHANGE = os.environ.get("OHLCV_EXCHANGE", "binance")
+# Primär börs för OHLCV (CCXT-id). OKX — användaren handlar där; datakällan ska
+# matcha handelsplatsen (blanda ALDRIG börsers volym i samma baslinje).
+OHLCV_EXCHANGE = os.environ.get("OHLCV_EXCHANGE", "okx")
 
 # Timeframes vi lagrar (CCXT-notation).
 TIMEFRAMES = ["1h", "4h", "1d"]
 TIMEFRAME_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 
-# Hur långt bak vi backfillar vid första körningen.
-BACKFILL_START = os.environ.get("BACKFILL_START", "2021-01-01T00:00:00Z")
+# Hur långt bak vi backfillar coins UTAN data. Default: ~90 dagar (radarn behöver
+# bara några veckor; kort backfill håller Supabase gratis-nivån). Befintliga coins
+# berörs inte (inkrementell hämtning). Sätt BACKFILL_START i .env för djup historik.
+def _default_backfill() -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT00:00:00Z")
+
+BACKFILL_START = os.environ.get("BACKFILL_START") or _default_backfill()
 
 
 @dataclass(frozen=True)
@@ -66,4 +73,17 @@ UNIVERSE = [
     Coin("LTC",  "Litecoin",   "payments","litecoin",                "LTC/USDT",  "LTC/USDT:USDT"),
     Coin("UNI",  "Uniswap",    "DeFi",   "uniswap",                  "UNI/USDT",  "UNI/USDT:USDT"),
     Coin("AAVE", "Aave",       "DeFi",   "aave",                     "AAVE/USDT", "AAVE/USDT:USDT"),
+    # Utökning 2026-07-19: halal-godkända (PiF "Comfortable") med OKX-stöd.
+    # Exkluderat: memecoins (DOGE/SHIB), guld (XAUT/PAXG), stables/wrappers,
+    # samt DEL/XMR/TON/DEXE/XDC/FTM som saknas på OKX.
+    Coin("TRX",  "TRON",         "L1",       "tron",                 "TRX/USDT",  "TRX/USDT:USDT"),
+    Coin("ZEC",  "Zcash",        "privacy",  "zcash",                "ZEC/USDT",  "ZEC/USDT:USDT"),
+    Coin("XLM",  "Stellar",      "payments", "stellar",              "XLM/USDT",  "XLM/USDT:USDT"),
+    Coin("BCH",  "Bitcoin Cash", "payments", "bitcoin-cash",         "BCH/USDT",  "BCH/USDT:USDT"),
+    Coin("SUI",  "Sui",          "L1",       "sui",                  "SUI/USDT",  "SUI/USDT:USDT"),
+    Coin("HBAR", "Hedera",       "L1",       "hedera-hashgraph",     "HBAR/USDT", "HBAR/USDT:USDT"),
+    Coin("CRO",  "Cronos",       "L1",       "crypto-com-chain",     "CRO/USDT",  "CRO/USDT:USDT"),
+    Coin("TAO",  "Bittensor",    "AI",       "bittensor",            "TAO/USDT",  "TAO/USDT:USDT"),
+    Coin("RAY",  "Raydium",      "DeFi",     "raydium",              "RAY/USDT",  "RAY/USDT:USDT"),
+    Coin("LEO",  "UNUS SED LEO", "exchange", "leo-token",            "LEO/USDT",  None),
 ]

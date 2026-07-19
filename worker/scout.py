@@ -21,9 +21,10 @@ import features
 from live_signals import MIN_BARS, _is_stale, _last_closed_idx
 
 # ---- Trösklar (känslighet — skruva här) ----
-VOL_SPIKE = 5.0          # × snittvolym = ovanlig volym (~3–4 flaggor/dag; sänk för fler)
-TURN_UP = 0.02           # kort-momentum (12h) ≥ +2% = "vänder upp"
-TURN_DN = -0.02          # kort-momentum (12h) ≤ -2% = "vänder ner"
+VOL_SPIKE = 6.0          # × snittvolym (höjd 5→6 vid 28-coin-universumet, håller larmvolymen nere)
+TURN_UP = 0.015          # kort-momentum (6h) ≥ +1.5% = "vänder upp" (6h-fönster = tidigare upptäckt)
+TURN_DN = -0.015         # kort-momentum (6h) ≤ -1.5% = "vänder ner"
+LATE_24H = 0.05          # 24h-rörelse > +5% ⇒ "⚠️ sent i rörelsen" på 🟢-flaggor
 TREND_MOVE = 0.04        # ±4% över 5 dygn = "har fallit / har stigit"
 OVEREXTENDED = 0.20      # hoppa 🟢 om redan upp >20% på 5d (för sent)
 FUNDING_EXTREME = 0.0003
@@ -54,7 +55,8 @@ def _snapshot(conn, coin, cid: int, tf: str):
     return {
         "cid": cid, "sym": coin.symbol, "price": c,
         "vol_ratio": float(df["volume"].iloc[i] / vol_base) if vol_base else 0.0,
-        "mom_short": float(c / df["close"].iloc[i - 12] - 1),   # ~12h: vänder upp/ner?
+        "mom_short": float(c / df["close"].iloc[i - 6] - 1),    # ~6h: vänder upp/ner? (tidig)
+        "mom24": float(c / df["close"].iloc[i - bpd] - 1),      # 24h: hur sen är du?
         "mom5": float(c / df["close"].iloc[i - 5 * bpd] - 1),   # 5d kontext
     }
 
@@ -116,7 +118,10 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         icon, title, note = SECTIONS[k]
         L.append(f"\n{icon} {title}:")
         for s in buckets[k][:6]:
-            L.append(f"  • {s['sym']} ~{s['price']:g}: {s['vol_ratio']:.1f}× volym, 12h {s['mom_short']*100:+.0f}%, 5d {s['mom5']*100:+.0f}%")
+            late = "  ⚠️ sent i rörelsen" if k == "turning_up" and s["mom24"] > LATE_24H else ""
+            L.append(f"  • {s['sym']} ~{s['price']:g}: {s['vol_ratio']:.1f}× volym, "
+                     f"6h {s['mom_short']*100:+.0f}%, 24h {s['mom24']*100:+.0f}%, "
+                     f"5d {s['mom5']*100:+.0f}%{late}")
         L.append(f"  <i>↳ {note}</i>")
     if funding:
         L.append("\n💰 <b>Funding-extremer:</b> " + "   ".join(f"{sym} {fr*100:+.3f}%" for sym, fr in funding[:8]))

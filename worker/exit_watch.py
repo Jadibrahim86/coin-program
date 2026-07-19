@@ -69,7 +69,7 @@ def _check_holding(conn, h: dict, timeframe: str) -> list:
         if (h["coin_id"], "exit_dist") not in recent:
             msgs.append(
                 f"🔴 <b>{h['symbol']}: säljvolym</b>\n"
-                f"  {snap['vol_ratio']:.1f}× volym, 12h {snap['mom_short']*100:+.0f}% · sedan köp: {pl}\n"
+                f"  {snap['vol_ratio']:.1f}× volym, 6h {snap['mom_short']*100:+.0f}% · sedan köp: {pl}\n"
                 f"  <i>Säljare kliver in — överväg att säkra vinst.</i>"
             )
             db.record_radar_alerts(conn, [(h["coin_id"], "exit_dist")])
