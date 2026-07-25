@@ -87,3 +87,31 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
 
 # Vilka feature-kolumner som sparas till features-tabellen (live-vägen).
 FEATURE_COLUMNS = ["trend", "rsi", "atr", "atr_pctile", "vol_z"]
+
+
+def daily_vol(closes) -> float | None:
+    """Dagsvolatilitet (andel, 0.045 = 4.5%/dag) från en serie 1h-stängningar.
+
+    Ren funktion — används av både boten (stop-förslag) och exit-vakten
+    (trail-bredd) så måtten aldrig glider isär.
+    """
+    if closes is None or len(closes) < 100:
+        return None
+    a = np.asarray(closes, dtype=float)
+    rets = a[1:] / a[:-1] - 1
+    return float(rets.std() * np.sqrt(24))
+
+
+def market_efficiency(closes) -> float | None:
+    """Kaufman efficiency ratio: |nettorörelse| / summa av alla stegs storlek.
+
+    ~1.0 = ren trend, ~0 = hackigt (chop). Etablerat regimmått — utbrottssignaler
+    är kända för att fungera dåligt när det är lågt.
+    """
+    if closes is None or len(closes) < 10:
+        return None
+    a = np.asarray(closes, dtype=float)
+    churn = np.abs(np.diff(a)).sum()
+    if churn == 0:
+        return None
+    return float(abs(a[-1] - a[0]) / churn)

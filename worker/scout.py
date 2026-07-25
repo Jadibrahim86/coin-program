@@ -32,6 +32,17 @@ FUNDING_MAX_AGE_H = 6
 DEDUP_HOURS = 8
 FUNDING_DEDUP_HOURS = 24  # kronisk extrem funding (t.ex. INJ) → max en alert per dygn
 
+# --- Marknadsregim (filtrerar 🟢) --------------------------------------------
+# Mätning 2026-07-25: 🟢-flaggor gav -1.4%/24h i en platt vecka. Uppdelat på
+# marknadens efficiency ratio (trend vs chop) blev det -0.03% i trendande läge
+# mot -2.5% i chop. Utbrottssignaler i hackig marknad = köpa toppen av en wiggle.
+# OBS: kalibrerat på FÅ observationer — tröskeln hålls trubbig med flit och
+# regimen skrivs alltid ut i meddelandet så vi kan fortsätta mäta.
+REGIME_REF = "BTC"          # marknadens taktpinne
+REGIME_WINDOW = 24          # timmar bakåt för efficiency/förändring
+CHOP_MAX = 0.20             # efficiency under detta = chop → inga 🟢
+MARKET_DOWN = -0.02         # BTC 24h under detta = risk-off → inga 🟢
+
 BARS_PER_DAY = {"5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 
 SECTIONS = {
@@ -73,6 +84,26 @@ def classify(s: dict) -> str | None:
     return None
 
 
+def market_regime(conn, coin_ids: dict) -> dict:
+    """Marknadens läge just nu: trendande, chop eller risk-off.
+
+    Returnerar {'label', 'allow_long', 'eff', 'chg'} — allow_long=False betyder
+    att 🟢-flaggor tystas (de har historiskt failat i chop/nedgång).
+    """
+    cid = coin_ids.get(REGIME_REF)
+    closes = db.load_recent_closes(conn, cid, "1h", REGIME_WINDOW + 1) if cid else None
+    if not closes or len(closes) < REGIME_WINDOW:
+        return {"label": "okänd", "allow_long": True, "eff": None, "chg": None}
+
+    eff = features.market_efficiency(closes)
+    chg = closes[-1] / closes[0] - 1
+    if chg <= MARKET_DOWN:
+        return {"label": f"risk-off ({REGIME_REF} {chg*100:+.1f}% 24h)", "allow_long": False, "eff": eff, "chg": chg}
+    if eff is not None and eff < CHOP_MAX:
+        return {"label": f"hackig/chop (eff {eff:.2f})", "allow_long": False, "eff": eff, "chg": chg}
+    return {"label": f"trendande (eff {eff:.2f}, {REGIME_REF} {chg*100:+.1f}%)", "allow_long": True, "eff": eff, "chg": chg}
+
+
 def _funding_flags(conn) -> list:
     out, now = [], datetime.now(timezone.utc)
     for sym, funding, ts in db.load_latest_funding(conn):
@@ -97,6 +128,13 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         if kind:
             buckets[kind].append(s)
 
+    # Marknadsfilter: 🟢 tystas i chop/risk-off (se REGIME-kommentaren ovan).
+    regime = market_regime(conn, coin_ids)
+    suppressed = 0
+    if not regime["allow_long"]:
+        suppressed = len(buckets["turning_up"])
+        buckets["turning_up"] = []
+
     recent = db.recent_radar_alerts(conn, DEDUP_HOURS)
     for k in buckets:
         buckets[k] = sorted((s for s in buckets[k] if (s["cid"], k) not in recent),
@@ -108,10 +146,15 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
                if (coin_ids.get(sym), "funding") not in recent_funding]
 
     if not (any(buckets.values()) or funding):
-        print("Inget nytt över trösklarna — inget skickat.")
+        extra = f" ({suppressed} 🟢 tystade — {regime['label']})" if suppressed else ""
+        print(f"Inget nytt över trösklarna — inget skickat.{extra}")
         return
 
-    L = [f"📡 <b>VOLYM-RADAR</b> ({timeframe}, bevakning – ej råd) — {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"]
+    L = [f"📡 <b>VOLYM-RADAR</b> ({timeframe}, bevakning – ej råd) — {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC",
+         f"<i>Marknad: {regime['label']}</i>"]
+    if suppressed:
+        L.append(f"<i>({suppressed} köp-flagga(or) tystad — köpsignaler har historiskt "
+                 f"failat i det här marknadsläget)</i>")
     for k in ("turning_up", "falling", "distribution"):
         if not buckets[k]:
             continue

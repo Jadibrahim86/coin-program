@@ -12,29 +12,35 @@ Kommandon (skriv i boten):
 
 Säkerhet: lyssnar BARA på TELEGRAM_CHAT_ID — andra ignoreras.
 """
-import math
 import time
 
 import requests
 
 import config
 import db
+import features
 
 API = "https://api.telegram.org/bot{token}/{method}"
-DEFAULT_STOP_PCT = 0.07  # stop = entry -7% om ingen anges
 POLL_TIMEOUT = 50
 SLEEPY_VOL = 0.02        # < 2%/dag = trögt för swing
+
+# Default-stop skalas mot coinets dagsrörelse i stället för fasta -7%. Efter en
+# vecka med verklig data låg ALLA förluster på exakt -7% (stoppen låg i brusfältet)
+# medan vinsterna kapades vid +2%. Ett coin som rör sig 3%/dag behöver mer luft.
+STOP_VOL_MULT = 2.5
+STOP_MIN, STOP_MAX = 0.05, 0.15
+PRICE_DEVIATION_MAX = 0.03   # >3% från marknaden = be om bekräftelse (fångar typos)
 
 
 def _daily_vol(conn, coin_id: int):
     """Dagsvolatilitet (andel, t.ex. 0.045 = 4.5%/dag) från senaste ~10 dygnens 1h-data."""
-    closes = db.load_recent_closes(conn, coin_id, "1h", 240)
-    if len(closes) < 100:
-        return None
-    rets = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
-    mean = sum(rets) / len(rets)
-    sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / len(rets))
-    return sd * math.sqrt(24)
+    return features.daily_vol(db.load_recent_closes(conn, coin_id, "1h", 240))
+
+
+def _suggest_stop(entry: float, vol) -> tuple:
+    """(stop_pris, stop_andel) — volatilitetsanpassad default-stop."""
+    pct = STOP_MIN if vol is None else min(max(STOP_VOL_MULT * vol, STOP_MIN), STOP_MAX)
+    return entry * (1 - pct), pct
 
 
 def _vol_advice(vol, entry: float, stop: float) -> str:
@@ -42,19 +48,35 @@ def _vol_advice(vol, entry: float, stop: float) -> str:
     if vol is None:
         return ""
     stop_pct = 1 - stop / entry
-    line = f"\n📊 Rör sig ~{vol*100:.1f}%/dag."
+    line = f"\n📊 Rör sig ~{vol*100:.1f}%/dag · stop ligger {stop_pct/vol:.1f}× dagsrörelsen bort."
     if stop_pct < 2 * vol:
-        rec_stop = entry * (1 - max(2 * vol, 0.05))
+        rec_stop, rec_pct = _suggest_stop(entry, vol)
         line += (
-            f"\n⚠️ <b>Din stop (-{stop_pct*100:.0f}%) är snävare än 2× dagsrörelsen</b> — "
-            f"risk att brus stoppar ut dig. Överväg stop ~{rec_stop:g} (-{max(2*vol,0.05)*100:.0f}%) "
-            f"och i så fall mindre position."
+            f"\n⚠️ <b>Snävare än 2× dagsrörelsen</b> — risk att brus stoppar ut dig. "
+            f"Överväg stop ~{rec_stop:g} (-{rec_pct*100:.0f}%) och <b>mindre position</b> "
+            f"så kronorna du riskerar blir desamma."
         )
     elif vol < SLEEPY_VOL:
         line += " 😴 Trög för swing — rörelser tar ofta veckor här."
     else:
-        line += " ✅ Stoppen ger rimligt utrymme för coinets normala rörelser."
+        line += " ✅ Rimligt utrymme för coinets normala rörelser."
     return line
+
+
+def _price_check(conn, coin_id: int, price: float, verb: str, cmd_hint: str) -> str | None:
+    """Varning om priset avviker kraftigt från marknaden (typo-skydd). None = ok."""
+    market = db.get_last_close(conn, coin_id)
+    if not market:
+        return None
+    dev = price / market - 1
+    if abs(dev) <= PRICE_DEVIATION_MAX:
+        return None
+    return (
+        f"⚠️ <b>Kollar en gång till:</b> du angav {price:g} för {verb}, men marknaden "
+        f"står i ~{market:g} ({dev*100:+.0f}%).\n"
+        f"Skrev du fel? Rätta annars siffran — eller lägg till <b>!</b> sist för att "
+        f"registrera ändå:\n<code>{cmd_hint} !</code>"
+    )
 
 
 def _tg(method: str, **params):
@@ -81,6 +103,8 @@ def _fmt_pl(entry: float, price: float) -> str:
 def handle_command(conn, text: str) -> str:
     """Tolkar ett kommando → svarstext. Kastar inget; fel blir vänliga svar."""
     parts = text.strip().split()
+    force = "!" in parts          # "!" var som helst = hoppa över priskontrollen
+    parts = [p for p in parts if p != "!"]
     cmd = parts[0].lower().split("@")[0]  # tål /buy@botnamn
     coin_ids = db.load_coin_ids(conn)
 
@@ -120,15 +144,20 @@ def handle_command(conn, text: str) -> str:
             return f"Känner inte till {sym}. Coins: {' '.join(sorted(coin_ids))}"
         if db.get_open_holding(conn, cid):
             return f"{sym} bevakas redan — /sell {sym} först om du vill börja om."
+        vol = _daily_vol(conn, cid)
         try:
             entry = _num(parts[2])
-            stop = _num(parts[3]) if len(parts) > 3 else entry * (1 - DEFAULT_STOP_PCT)
+            stop = _num(parts[3]) if len(parts) > 3 else _suggest_stop(entry, vol)[0]
         except ValueError:
             return "Kunde inte tolka priset. Skriv: /buy SOL 82 (eller /buy SOL 82 78)"
         if stop >= entry:
             return f"Stoppen ({stop:g}) måste ligga UNDER köpkursen ({entry:g})."
+        if not force:
+            warn = _price_check(conn, cid, entry, "köp", " ".join(parts))
+            if warn:
+                return warn
         db.insert_holding(conn, cid, entry, stop)
-        advice = _vol_advice(_daily_vol(conn, cid), entry, stop)
+        advice = _vol_advice(vol, entry, stop)
         return (
             f"✅ Bevakar <b>{sym}</b> från {entry:g}.\n"
             f"Stop: {stop:g} ({(stop/entry-1)*100:+.1f}%)"
@@ -152,6 +181,10 @@ def handle_command(conn, text: str) -> str:
             price = _num(parts[2]) if len(parts) > 2 else db.get_last_close(conn, cid)
         except ValueError:
             return "Kunde inte tolka priset."
+        if not force and len(parts) > 2:
+            warn = _price_check(conn, cid, price, "sälj", " ".join(parts))
+            if warn:
+                return warn
         db.close_holding(conn, h["id"], price)
         pl = f" — resultat {_fmt_pl(h['entry'], price)} ({h['entry']:g} → {price:g})" if price else ""
         return f"🔚 Slutar bevaka <b>{sym}</b>{pl}."
