@@ -368,12 +368,56 @@ def recent_radar_alerts(conn, within_hours: int) -> set:
 
 
 def record_radar_alerts(conn, rows) -> None:
-    """rows: [(coin_id, flag_type), ...]."""
+    """rows: [(coin_id, flag_type)] eller [(coin_id, flag_type, meta_dict)].
+
+    meta sparar det flaggan byggde på (volymkvot, OI-förändring, pris) så vi i
+    efterhand kan mäta VILKA varianter av en flagga som faktiskt fungerade.
+    """
     if not rows:
         return
+    payload = [
+        (r[0], r[1], json.dumps(_json_safe(r[2])) if len(r) > 2 else None)
+        for r in rows
+    ]
     with conn.cursor() as cur:
-        execute_values(cur, "INSERT INTO radar_alerts (coin_id, flag_type) VALUES %s", rows)
+        execute_values(
+            cur, "INSERT INTO radar_alerts (coin_id, flag_type, meta) VALUES %s", payload
+        )
     conn.commit()
+
+
+def oi_change(conn, coin_id: int, hours: int = 24):
+    """Open interest-förändring över ~N timmar (andel, +0.077 = +7.7%).
+
+    OI läst MED priset skiljer äkta nya pengar från short-covering (se scout.OI_*).
+    Returnerar None om det saknas en tillräckligt gammal jämförelsepunkt.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT open_interest FROM derivatives
+            WHERE coin_id = %s AND open_interest > 0
+            ORDER BY ts DESC LIMIT 1
+            """,
+            (coin_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        now_oi = float(row[0])
+        cur.execute(
+            """
+            SELECT open_interest FROM derivatives
+            WHERE coin_id = %s AND open_interest > 0
+              AND ts <= now() - make_interval(hours => %s)
+            ORDER BY ts DESC LIMIT 1
+            """,
+            (coin_id, hours),
+        )
+        row = cur.fetchone()
+        if not row or float(row[0]) == 0:
+            return None
+        return now_oi / float(row[0]) - 1
 
 
 def load_latest_funding(conn) -> list:

@@ -43,6 +43,18 @@ REGIME_WINDOW = 24          # timmar bakåt för efficiency/förändring
 CHOP_MAX = 0.20             # efficiency under detta = chop → inga 🟢
 MARKET_DOWN = -0.02         # BTC 24h under detta = risk-off → inga 🟢
 
+# --- Open interest (konfluens) -----------------------------------------------
+# OI läst TILLSAMMANS med priset skiljer äkta nya pengar från kulisser:
+#   pris upp + OI upp  = nya positioner öppnas → rörelsen har bränsle
+#   pris upp + OI ner  = shorts som täcker → ihålig rusning, rinner ofta ut
+#   pris ner + OI upp  = nya shorts pressar → nedtrycket har kraft
+#   pris ner + OI ner  = longs likvideras → kan närma sig utbottning
+# Tröskeln ±2% är satt från fördelningen av 12060 mätta 24h-förändringar
+# (kvartiler ±3%) → ~30% "stiger", ~34% "faller", ~36% neutralt.
+# EJ VALIDERAD som edge än — visas som markering, mäts på kommande trades.
+OI_WINDOW_H = 24
+OI_THRESHOLD = 0.02
+
 BARS_PER_DAY = {"5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 
 SECTIONS = {
@@ -69,7 +81,34 @@ def _snapshot(conn, coin, cid: int, tf: str):
         "mom_short": float(c / df["close"].iloc[i - 6] - 1),    # ~6h: vänder upp/ner? (tidig)
         "mom24": float(c / df["close"].iloc[i - bpd] - 1),      # 24h: hur sen är du?
         "mom5": float(c / df["close"].iloc[i - 5 * bpd] - 1),   # 5d kontext
+        "oi_chg": db.oi_change(conn, cid, OI_WINDOW_H),         # derivat-konfluens
     }
+
+
+def oi_label(kind: str, oi) -> tuple:
+    """(markering, kort_text) för ett mönster givet OI-förändringen. Se OI_-kommentaren."""
+    if oi is None:
+        return "", "OI saknas"
+    pct = f"{oi*100:+.0f}%"
+    if kind == "turning_up":
+        if oi >= OI_THRESHOLD:
+            return "✅", f"OI {pct} — nya pengar in"
+        if oi <= -OI_THRESHOLD:
+            return "⚠️", f"OI {pct} — mest short-covering"
+        return "➖", f"OI {pct} — ingen bekräftelse"
+    if kind == "falling":
+        if oi >= OI_THRESHOLD:
+            return "⚠️", f"OI {pct} — nya shorts pressar"
+        if oi <= -OI_THRESHOLD:
+            return "👀", f"OI {pct} — longs likvideras, kan bottna"
+        return "➖", f"OI {pct}"
+    if kind == "distribution":
+        if oi >= OI_THRESHOLD:
+            return "⚠️", f"OI {pct} — nya shorts kliver in"
+        if oi <= -OI_THRESHOLD:
+            return "➖", f"OI {pct} — longs stänger"
+        return "➖", f"OI {pct}"
+    return "", f"OI {pct}"
 
 
 def classify(s: dict) -> str | None:
@@ -162,10 +201,16 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         L.append(f"\n{icon} {title}:")
         for s in buckets[k][:6]:
             late = "  ⚠️ sent i rörelsen" if k == "turning_up" and s["mom24"] > LATE_24H else ""
-            L.append(f"  • {s['sym']} ~{s['price']:g}: {s['vol_ratio']:.1f}× volym, "
+            mark, oitxt = oi_label(k, s["oi_chg"])
+            L.append(f"  • {mark} <b>{s['sym']}</b> ~{s['price']:g}: {s['vol_ratio']:.1f}× volym, "
                      f"6h {s['mom_short']*100:+.0f}%, 24h {s['mom24']*100:+.0f}%, "
-                     f"5d {s['mom5']*100:+.0f}%{late}")
+                     f"5d {s['mom5']*100:+.0f}%{late}\n"
+                     f"      {oitxt}")
         L.append(f"  <i>↳ {note}</i>")
+        if k == "turning_up":
+            L.append("  <i>↳ ✅ = pris + volym + OI drar åt samma håll (konfluens). "
+                     "⚠️ = uppgången drivs av short-covering och rinner ofta ut. "
+                     "OI-delen är ny och ovaliderad — vi mäter den på kommande trades.</i>")
     if funding:
         L.append("\n💰 <b>Funding-extremer:</b> " + "   ".join(f"{sym} {fr*100:+.3f}%" for sym, fr in funding[:8]))
     L.append("\n<i>Strålkastare att granska själv — inte köp/sälj. Fler missar än träffar; din bedömning avgör.</i>")
@@ -176,7 +221,11 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         alerts.send(text)
         db.record_radar_alerts(
             conn,
-            [(s["cid"], k) for k in buckets for s in buckets[k]]
-            + [(coin_ids[sym], "funding") for sym, _ in funding if sym in coin_ids],
+            [(s["cid"], k, {"price": s["price"], "vol_ratio": round(s["vol_ratio"], 1),
+                            "oi_chg": s["oi_chg"], "mom24": s["mom24"],
+                            "regime": regime["label"]})
+             for k in buckets for s in buckets[k]]
+            + [(coin_ids[sym], "funding", {"funding": fr})
+               for sym, fr in funding if sym in coin_ids],
         )
         print("\n[skickat + flaggor registrerade för dedup]")

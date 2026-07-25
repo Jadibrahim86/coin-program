@@ -139,10 +139,12 @@ create table if not exists bot_state (
 create table if not exists radar_alerts (
     id        bigint generated always as identity primary key,
     coin_id   bigint not null references coins(id) on delete cascade,
-    flag_type text not null,                          -- 'accumulation' | 'distribution'
+    flag_type text not null,                          -- 'turning_up' | 'falling' | 'distribution' | 'funding' | 'stop'
+    meta      jsonb,                                  -- vad flaggan byggde på (volym, OI, pris) → för utvärdering
     ts        timestamptz not null default now()
 );
 create index if not exists idx_radar_alerts_ts on radar_alerts (ts);
+alter table radar_alerts add column if not exists meta jsonb;
 
 -- Backtest-körningar med nyckeltal OCH baseline-nyckeltal (§7.2).
 create table if not exists backtest_runs (

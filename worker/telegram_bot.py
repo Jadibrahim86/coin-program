@@ -19,6 +19,7 @@ import requests
 import config
 import db
 import features
+import scout
 
 API = "https://api.telegram.org/bot{token}/{method}"
 POLL_TIMEOUT = 50
@@ -158,6 +159,10 @@ def handle_command(conn, text: str) -> str:
                 return warn
         db.insert_holding(conn, cid, entry, stop)
         advice = _vol_advice(vol, entry, stop)
+        oi = db.oi_change(conn, cid, 24)
+        if oi is not None:
+            mark, oitxt = scout.oi_label("turning_up", oi)
+            advice += f"\n{mark} {oitxt} (senaste dygnet)"
         return (
             f"✅ Bevakar <b>{sym}</b> från {entry:g}.\n"
             f"Stop: {stop:g} ({(stop/entry-1)*100:+.1f}%)"
