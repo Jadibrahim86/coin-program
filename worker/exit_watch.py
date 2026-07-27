@@ -41,7 +41,8 @@ def _check_holding(conn, h: dict, timeframe: str) -> list:
     i = _last_closed_idx(df, timeframe)
     close = float(df["close"].iloc[i])
     entry, hw = h["entry"], h["high_water"]
-    pl = f"{(close/entry-1)*100:+.1f}%"
+    pl_frac = close / entry - 1
+    pl = f"{pl_frac*100:+.1f}%"
 
     # Ny topp? (uppdatera high water mark)
     if close > hw:
@@ -81,10 +82,21 @@ def _check_holding(conn, h: dict, timeframe: str) -> list:
     if snap and scout.classify(snap) == "distribution":
         recent = db.recent_radar_alerts(conn, DIST_DEDUP_HOURS)
         if (h["coin_id"], "exit_dist") not in recent:
+            # Slutklämmen måste matcha ditt FAKTISKA läge — larmet triggar på att
+            # COINET stigit, inte på att du ligger plus. Att säga "säkra vinst" till
+            # någon som ligger back är samma fel som trail-larmet hade.
+            if pl_frac >= MIN_PROFIT_NOW:
+                advice = "Säljare kliver in — överväg att säkra vinst."
+            elif pl_frac >= 0:
+                advice = "Säljare kliver in medan du är nära nollan — bevaka noga."
+            else:
+                stop_txt = f" Din stop ligger på {h['stop']:g}." if h["stop"] else ""
+                advice = ("Säljare kliver in medan du ligger back — rörelsen kan "
+                          f"fortsätta ner.{stop_txt}")
             msgs.append(
                 f"🔴 <b>{h['symbol']}: säljvolym</b>\n"
                 f"  {snap['vol_ratio']:.1f}× volym, 6h {snap['mom_short']*100:+.0f}% · sedan köp: {pl}\n"
-                f"  <i>Säljare kliver in — överväg att säkra vinst.</i>"
+                f"  <i>{advice}</i>"
             )
             db.record_radar_alerts(conn, [(h["coin_id"], "exit_dist")])
     return msgs
