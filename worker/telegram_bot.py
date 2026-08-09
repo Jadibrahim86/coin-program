@@ -64,6 +64,63 @@ def _vol_advice(vol, entry: float, stop: float) -> str:
     return line
 
 
+def _position_advice(conn, entry: float, stop: float) -> str:
+    """Hur mycket ska du köpa för? Ren aritmetik från ditt kapital och stop-avstånd.
+
+    Positionsstorleken räknas UT FRÅN stoppen — inte tvärtom. Det är det enda som
+    avgör om ett konto överlever en förlustsvit.
+    """
+    cap = db.get_bot_state(conn, "capital")
+    if not cap:
+        return ("\n💡 Sätt <code>/kapital 100000 1</code> (kapital + risk-%) så räknar "
+                "jag ut hur mycket du bör köpa för.")
+    capital, risk_pct = (float(x) for x in cap.split(","))
+    risk_kr = capital * risk_pct / 100
+    stop_dist = 1 - stop / entry
+    if stop_dist <= 0:
+        return ""
+    notional = risk_kr / stop_dist
+    share = notional / capital * 100
+    warn = ""
+    if share > 25:
+        warn = ("\n   ⚠️ Det är en stor del av kapitalet i en position — "
+                "överväg mindre eller bredare stop.")
+    return (f"\n💰 Riskerar {risk_kr:,.0f} kr ({risk_pct:g}%) → köp för ca "
+            f"<b>{notional:,.0f} kr</b> ({share:.0f}% av kapitalet){warn}").replace(",", " ")
+
+
+def _correlation_warning(conn, coin_id: int, symbol: str) -> str:
+    """Varnar om det nya coinet i praktiken är samma bet som det du redan äger."""
+    holdings = [h for h in db.load_open_holdings(conn) if h["coin_id"] != coin_id]
+    if not holdings:
+        return ""
+    new = db.load_recent_closes(conn, coin_id, "1h", 336)
+    if len(new) < 100:
+        return ""
+    import numpy as np
+    new_r = np.diff(np.array(new)) / np.array(new[:-1])
+    corrs = []
+    for h in holdings:
+        c = db.load_recent_closes(conn, h["coin_id"], "1h", 336)
+        n = min(len(c), len(new) )
+        if n < 100:
+            continue
+        r = np.diff(np.array(c[-n:])) / np.array(c[-n:][:-1])
+        m = min(len(r), len(new_r))
+        if m >= 100:
+            corrs.append((h["symbol"], float(np.corrcoef(r[-m:], new_r[-m:])[0, 1])))
+    if not corrs:
+        return ""
+    avg = sum(c for _, c in corrs) / len(corrs)
+    if avg < 0.6:
+        return ""
+    worst = max(corrs, key=lambda x: x[1])
+    return (f"\n🔗 Rör sig nästan likadant som dina nuvarande innehav "
+            f"(snittkorrelation {avg:.2f}, mest med {worst[0]} {worst[1]:.2f}).\n"
+            f"   Det blir {len(holdings)+1} positioner men i praktiken ETT bet — "
+            f"de faller ihop när marknaden vänder.")
+
+
 def _price_check(conn, coin_id: int, price: float, verb: str, cmd_hint: str) -> str | None:
     """Varning om priset avviker kraftigt från marknaden (typo-skydd). None = ok."""
     market = db.get_last_close(conn, coin_id)
@@ -110,16 +167,41 @@ def handle_command(conn, text: str) -> str:
     coin_ids = db.load_coin_ids(conn)
 
     if cmd in ("/start", "/help"):
+        cap = db.get_bot_state(conn, "capital")
+        cap_txt = (f"{float(cap.split(',')[0]):,.0f} kr, {cap.split(',')[1]}% risk".replace(",", " ")
+                   if cap else "ej satt")
+        watched = sorted(c.symbol for c in config.UNIVERSE)
         return (
             "<b>Kommandon:</b>\n"
-            "/buy SOL 82 — bevaka SOL köpt på 82 (stop -7%)\n"
+            "/buy SOL 82 — bevaka SOL köpt på 82 (volanpassad stop)\n"
             "/buy SOL 82 78 — med egen stop på 78\n"
             "/sell SOL 85 — stäng bevakning (säljkurs valfri)\n"
-            "/positions — innehav med P/L\n\n"
-            f"Coins: {' '.join(sorted(coin_ids))}\n"
-            "<i>Jag kollar dina innehav varje timme och larmar vid stop, "
-            "vikande topp eller säljvolym.</i>"
+            "/positions (/innehav) — innehav med P/L\n"
+            f"/kapital 100000 1 — kapital + risk% för positionsstorlek ({cap_txt})\n"
+            "<i>Lägg till ! sist för att kringgå priskontrollen.</i>\n\n"
+            f"Bevakar {len(watched)} coins: {' '.join(watched)}\n"
+            "<i>Jag kollar dina innehav varje timme och larmar vid stop, vikande topp "
+            "eller säljvolym — plus marknadslarm när allt rör sig ihop, och "
+            "veckorapport på söndagar.</i>"
         )
+
+    if cmd in ("/kapital", "/capital"):
+        if len(parts) < 2:
+            cur = db.get_bot_state(conn, "capital")
+            return (f"Nuvarande: {cur.replace(',', ' kr, ')}% risk" if cur else
+                    "Inte satt. Skriv t.ex. <code>/kapital 100000 1</code> "
+                    "(100 000 kr, 1% risk per trade).")
+        try:
+            capital = _num(parts[1])
+            risk = _num(parts[2]) if len(parts) > 2 else 1.0
+        except ValueError:
+            return "Kunde inte tolka. Skriv: /kapital 100000 1"
+        if capital <= 0 or not (0 < risk <= 5):
+            return "Kapital måste vara > 0 och risk mellan 0 och 5%."
+        db.set_bot_state(conn, "capital", f"{capital},{risk}")
+        return (f"✅ Kapital {capital:,.0f} kr, risk {risk:g}% per trade "
+                f"({capital*risk/100:,.0f} kr).\n"
+                f"<i>Jag räknar nu ut köpbelopp åt dig vid varje /buy.</i>").replace(",", " ")
 
     if cmd in ("/positions", "/pos", "/innehav"):
         holdings = db.load_open_holdings(conn)
@@ -157,12 +239,14 @@ def handle_command(conn, text: str) -> str:
             warn = _price_check(conn, cid, entry, "köp", " ".join(parts))
             if warn:
                 return warn
+        corr_warn = _correlation_warning(conn, cid, sym)
         db.insert_holding(conn, cid, entry, stop)
         advice = _vol_advice(vol, entry, stop)
         oi = db.oi_change(conn, cid, 24)
         if oi is not None:
             mark, oitxt = scout.oi_label("turning_up", oi)
             advice += f"\n{mark} {oitxt} (senaste dygnet)"
+        advice += _position_advice(conn, entry, stop) + corr_warn
         return (
             f"✅ Bevakar <b>{sym}</b> från {entry:g}.\n"
             f"Stop: {stop:g} ({(stop/entry-1)*100:+.1f}%)"

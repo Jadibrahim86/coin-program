@@ -87,6 +87,13 @@ def main() -> None:
     p_ew.add_argument("--timeframe", default="1h")
     p_ew.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
 
+    p_st = sub.add_parser("stress", help="Marknadslarm: extrem/onormal marknad + hur innehaven påverkas")
+    p_st.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
+
+    p_wr = sub.add_parser("weekly-report", help="Veckorapport: betygsätt flaggornas utfall (söndagar)")
+    p_wr.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
+    p_wr.add_argument("--force", action="store_true", help="Kör även om det inte är söndag")
+
     p_bt = sub.add_parser("backtest", help="Kör backtesten mot baseline (grinden)")
     p_bt.add_argument("--timeframe", default="4h")
     p_bt.add_argument("--symbols", nargs="*")
@@ -148,6 +155,13 @@ def main() -> None:
         elif args.cmd == "exit-watch":
             import exit_watch
             exit_watch.run(conn, args.timeframe, send=not args.no_send)
+        elif args.cmd == "stress":
+            import stress
+            stress.run(conn, send=not args.no_send)
+        elif args.cmd == "weekly-report":
+            import report
+            if not report.run(conn, send=not args.no_send, force=args.force):
+                print("Inte dags för veckorapport (kör med --force för att tvinga).")
         elif args.cmd == "validate":
             import validate
             validate.run(conn, args.timeframe, allow_short=not args.long_only)

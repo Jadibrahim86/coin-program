@@ -420,6 +420,61 @@ def oi_change(conn, coin_id: int, hours: int = 24):
         return now_oi / float(row[0]) - 1
 
 
+def aggregate_oi_change(conn, hours: int = 24):
+    """Samlad OI-förändring över hela universumet — fångar likvidationskaskader."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH now_ AS (
+              SELECT DISTINCT ON (coin_id) coin_id, open_interest oi
+              FROM derivatives WHERE open_interest > 0 ORDER BY coin_id, ts DESC),
+            prev AS (
+              SELECT DISTINCT ON (coin_id) coin_id, open_interest oi
+              FROM derivatives WHERE open_interest > 0
+                AND ts <= now() - make_interval(hours => %s)
+              ORDER BY coin_id, ts DESC)
+            SELECT sum(now_.oi), sum(prev.oi)
+            FROM now_ JOIN prev ON prev.coin_id = now_.coin_id
+            """,
+            (hours,),
+        )
+        row = cur.fetchone()
+    if not row or not row[0] or not row[1]:
+        return None
+    return float(row[0]) / float(row[1]) - 1
+
+
+def load_flag_outcomes(conn, days: int = 30) -> list:
+    """[(symbol, coin_id, flag_type, ts, meta)] för loggade flaggor — veckorapporten."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.symbol, ra.coin_id, ra.flag_type, ra.ts, ra.meta
+            FROM radar_alerts ra JOIN coins c ON c.id = ra.coin_id
+            WHERE ra.meta IS NOT NULL
+              AND ra.flag_type IN ('turning_up','falling','distribution')
+              AND ra.ts >= now() - make_interval(days => %s)
+            ORDER BY ra.ts
+            """,
+            (days,),
+        )
+        return cur.fetchall()
+
+
+def load_closed_holdings(conn, days: int = 30) -> list:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.symbol, h.entry_price, h.exit_price, h.opened_at, h.closed_at
+            FROM holdings h JOIN coins c ON c.id = h.coin_id
+            WHERE h.closed_at IS NOT NULL AND h.closed_at >= now() - make_interval(days => %s)
+            ORDER BY h.closed_at
+            """,
+            (days,),
+        )
+        return cur.fetchall()
+
+
 def load_latest_funding(conn) -> list:
     """[(symbol, funding_rate, ts)] — senaste derivatsnapshot per coin."""
     with conn.cursor() as cur:

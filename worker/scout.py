@@ -11,6 +11,7 @@ det som skiljde AVAX (vände upp, +10%) från DOT (föll vidare, kniv) i din ver
 Dedup hindrar upprepning av samma coin+mönster inom DEDUP_HOURS.
 """
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -54,6 +55,8 @@ MARKET_DOWN = -0.02         # BTC 24h under detta = risk-off → inga 🟢
 # EJ VALIDERAD som edge än — visas som markering, mäts på kommande trades.
 OI_WINDOW_H = 24
 OI_THRESHOLD = 0.02
+OI_STRONG = 0.07            # ✅✅ — mätning antyder att STORLEKEN betyder mer än tecknet
+VOL_STRONG = 8.0            # volymspik som räknas som "stark" i konfluensbetyget
 
 BARS_PER_DAY = {"5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 
@@ -85,12 +88,35 @@ def _snapshot(conn, coin, cid: int, tf: str):
     }
 
 
+def confluence(s: dict, regime: dict) -> tuple:
+    """(stjärnor, rader) — hur många av de fyra sakerna drar åt samma håll?
+
+    De fyra är valda för att de skilde vinnare från förlorare i verklig data:
+    UNI (+11.9%) var 4/4, BCH (-6.4%) var 2/4 trots att båda hade OI-stöd.
+    """
+    oi = s.get("oi_chg")
+    checks = [
+        (s["vol_ratio"] >= VOL_STRONG,
+         f"Volym {s['vol_ratio']:.1f}× snittet" + ("" if s["vol_ratio"] >= VOL_STRONG else " (måttlig)")),
+        (oi is not None and oi >= OI_THRESHOLD,
+         f"OI {oi*100:+.0f}%" if oi is not None else "OI saknas"),
+        (s["mom5"] > 0, f"5d {s['mom5']*100:+.0f}%" + (" — redan i uppåttrend" if s["mom5"] > 0 else " — faller ännu")),
+        (regime.get("allow_long", False), f"Marknad: {regime.get('label','?')}"),
+    ]
+    n = sum(1 for ok, _ in checks if ok)
+    stars = "⭐" * n + "☆" * (4 - n)
+    rows = [f"      {'✅' if ok else '❌'} {txt}" for ok, txt in checks]
+    return stars, n, rows
+
+
 def oi_label(kind: str, oi) -> tuple:
     """(markering, kort_text) för ett mönster givet OI-förändringen. Se OI_-kommentaren."""
     if oi is None:
         return "", "OI saknas"
     pct = f"{oi*100:+.0f}%"
     if kind == "turning_up":
+        if oi >= OI_STRONG:
+            return "✅✅", f"OI {pct} — nya pengar in (starkt)"
         if oi >= OI_THRESHOLD:
             return "✅", f"OI {pct} — nya pengar in"
         if oi <= -OI_THRESHOLD:
@@ -155,6 +181,8 @@ def _funding_flags(conn) -> list:
 
 def run(conn, timeframe: str = "1h", send: bool = True) -> None:
     coin_ids = db.load_coin_ids(conn)
+    btc = _snapshot(conn, SimpleNamespace(symbol="BTC"), coin_ids["BTC"], timeframe) \
+        if "BTC" in coin_ids else None
     buckets = {"turning_up": [], "falling": [], "distribution": []}
     for coin in config.UNIVERSE:
         cid = coin_ids.get(coin.symbol)
@@ -163,6 +191,8 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         s = _snapshot(conn, coin, cid, timeframe)
         if not s:
             continue
+        # Relativ styrka: UNI:s verkliga tell var att den steg MEDAN BTC föll.
+        s["rs_btc"] = (s["mom24"] - btc["mom24"]) if btc and coin.symbol != "BTC" else None
         kind = classify(s)
         if kind:
             buckets[kind].append(s)
@@ -200,17 +230,25 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         icon, title, note = SECTIONS[k]
         L.append(f"\n{icon} {title}:")
         for s in buckets[k][:6]:
-            late = "  ⚠️ sent i rörelsen" if k == "turning_up" and s["mom24"] > LATE_24H else ""
-            mark, oitxt = oi_label(k, s["oi_chg"])
-            L.append(f"  • {mark} <b>{s['sym']}</b> ~{s['price']:g}: {s['vol_ratio']:.1f}× volym, "
-                     f"6h {s['mom_short']*100:+.0f}%, 24h {s['mom24']*100:+.0f}%, "
-                     f"5d {s['mom5']*100:+.0f}%{late}\n"
-                     f"      {oitxt}")
+            rs = s.get("rs_btc")
+            rs_txt = f" · vs BTC {rs*100:+.0f}%" if rs is not None else ""
+            if k == "turning_up":
+                stars, n, rows = confluence(s, regime)
+                late = "  ⚠️ sent i rörelsen" if s["mom24"] > LATE_24H else ""
+                L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/4{late}")
+                L.extend(rows)
+                L.append(f"      24h {s['mom24']*100:+.0f}%{rs_txt}")
+            else:
+                mark, oitxt = oi_label(k, s["oi_chg"])
+                L.append(f"  • {mark} <b>{s['sym']}</b> ~{s['price']:g}: {s['vol_ratio']:.1f}× volym, "
+                         f"6h {s['mom_short']*100:+.0f}%, 24h {s['mom24']*100:+.0f}%, "
+                         f"5d {s['mom5']*100:+.0f}%{rs_txt}\n"
+                         f"      {oitxt}")
         L.append(f"  <i>↳ {note}</i>")
         if k == "turning_up":
-            L.append("  <i>↳ ✅ = pris + volym + OI drar åt samma håll (konfluens). "
-                     "⚠️ = uppgången drivs av short-covering och rinner ofta ut. "
-                     "OI-delen är ny och ovaliderad — vi mäter den på kommande trades.</i>")
+            L.append("  <i>↳ ⭐ = hur många av volym / OI / 5d-trend / marknadsläge som drar "
+                     "åt samma håll. 4/4 är det starkaste läget vi kan visa — inte en köporder. "
+                     "Mätt: fler stjärnor har hittills gett bättre utfall, men på få observationer.</i>")
     if funding:
         L.append("\n💰 <b>Funding-extremer:</b> " + "   ".join(f"{sym} {fr*100:+.3f}%" for sym, fr in funding[:8]))
     L.append("\n<i>Strålkastare att granska själv — inte köp/sälj. Fler missar än träffar; din bedömning avgör.</i>")
