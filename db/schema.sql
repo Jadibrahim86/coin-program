@@ -119,6 +119,7 @@ create table if not exists weights (
 create table if not exists holdings (
     id             bigint generated always as identity primary key,
     coin_id        bigint not null references coins(id),
+    amount         numeric,                           -- insats i kr (valfritt) → P/L i kronor
     entry_price    numeric not null,
     stop_price     numeric,
     high_water     numeric,                          -- högsta close sedan köp

@@ -244,6 +244,7 @@ def ensure_exit_tables(conn) -> None:
                 closed_at      timestamptz,
                 exit_price     numeric
             );
+            alter table holdings add column if not exists amount numeric;
             create table if not exists bot_state (
                 key   text primary key,
                 value text not null
@@ -281,14 +282,15 @@ def get_open_holding(conn, coin_id: int):
         return row[0] if row else None
 
 
-def insert_holding(conn, coin_id: int, entry_price: float, stop_price: float) -> None:
+def insert_holding(conn, coin_id: int, entry_price: float, stop_price: float,
+                   amount=None) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO holdings (coin_id, entry_price, stop_price, high_water)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO holdings (coin_id, entry_price, stop_price, high_water, amount)
+            VALUES (%s, %s, %s, %s, %s)
             """,
-            (coin_id, entry_price, stop_price, entry_price),
+            (coin_id, entry_price, stop_price, entry_price, amount),
         )
     conn.commit()
 
@@ -298,19 +300,20 @@ def load_open_holdings(conn) -> list:
         cur.execute(
             """
             SELECT h.id, h.coin_id, c.symbol, h.entry_price, h.stop_price,
-                   h.high_water, h.trail_alert_at, h.stop_alerted, h.opened_at
+                   h.high_water, h.trail_alert_at, h.stop_alerted, h.opened_at, h.amount
             FROM holdings h JOIN coins c ON c.id = h.coin_id
             WHERE h.closed_at IS NULL ORDER BY h.opened_at
             """
         )
         out = []
-        for hid, cid, sym, entry, stop, hw, ta, sa, ot in cur.fetchall():
+        for hid, cid, sym, entry, stop, hw, ta, sa, ot, amt in cur.fetchall():
             out.append({
                 "id": hid, "coin_id": cid, "symbol": sym,
                 "entry": float(entry), "stop": float(stop) if stop is not None else None,
                 "high_water": float(hw) if hw is not None else float(entry),
                 "trail_alert_at": float(ta) if ta is not None else None,
                 "stop_alerted": sa, "opened_at": ot,
+                "amount": float(amt) if amt is not None else None,
             })
         return out
 

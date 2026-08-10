@@ -95,11 +95,11 @@ def confluence(s: dict, regime: dict) -> tuple:
     UNI (+11.9%) var 4/4, BCH (-6.4%) var 2/4 trots att båda hade OI-stöd.
     """
     oi = s.get("oi_chg")
+    _, oi_txt = oi_label("turning_up", oi)   # samma förklaring som i /buy och 🟡/🔴
     checks = [
         (s["vol_ratio"] >= VOL_STRONG,
          f"Volym {s['vol_ratio']:.1f}× snittet" + ("" if s["vol_ratio"] >= VOL_STRONG else " (måttlig)")),
-        (oi is not None and oi >= OI_THRESHOLD,
-         f"OI {oi*100:+.0f}%" if oi is not None else "OI saknas"),
+        (oi is not None and oi >= OI_THRESHOLD, oi_txt),
         (s["mom5"] > 0, f"5d {s['mom5']*100:+.0f}%" + (" — redan i uppåttrend" if s["mom5"] > 0 else " — faller ännu")),
         (regime.get("allow_long", False), f"Marknad: {regime.get('label','?')}"),
     ]

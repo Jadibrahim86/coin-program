@@ -64,29 +64,43 @@ def _vol_advice(vol, entry: float, stop: float) -> str:
     return line
 
 
-def _position_advice(conn, entry: float, stop: float) -> str:
-    """Hur mycket ska du köpa för? Ren aritmetik från ditt kapital och stop-avstånd.
+def _kr(x: float) -> str:
+    return f"{x:,.0f}".replace(",", " ")
 
-    Positionsstorleken räknas UT FRÅN stoppen — inte tvärtom. Det är det enda som
-    avgör om ett konto överlever en förlustsvit.
+
+def _parse_extras(parts: list) -> tuple:
+    """Plockar ut '1000kr' (insats) och 'risk20'/'20%' ur kommandot.
+
+    Returnerar (kvarvarande_parts, belopp, risk_andel). Bare tal lämnas kvar så
+    tredje positionen fortfarande betyder stop-pris som förut.
     """
-    cap = db.get_bot_state(conn, "capital")
-    if not cap:
-        return ("\n💡 Sätt <code>/kapital 100000 1</code> (kapital + risk-%) så räknar "
-                "jag ut hur mycket du bör köpa för.")
-    capital, risk_pct = (float(x) for x in cap.split(","))
-    risk_kr = capital * risk_pct / 100
+    rest, amount, risk = [], None, None
+    for p in parts:
+        low = p.lower().replace(",", ".")
+        if low.endswith("kr"):
+            try:
+                amount = float(low[:-2]); continue
+            except ValueError:
+                pass
+        if low.startswith("risk") or low.endswith("%"):
+            try:
+                risk = float(low.removeprefix("risk").rstrip("%")) / 100; continue
+            except ValueError:
+                pass
+        rest.append(p)
+    return rest, amount, risk
+
+
+def _risk_line(entry: float, stop: float, amount, chosen_risk) -> str:
+    """Vad den här traden faktiskt riskerar — i kronor, inte bara procent."""
     stop_dist = 1 - stop / entry
-    if stop_dist <= 0:
-        return ""
-    notional = risk_kr / stop_dist
-    share = notional / capital * 100
-    warn = ""
-    if share > 25:
-        warn = ("\n   ⚠️ Det är en stor del av kapitalet i en position — "
-                "överväg mindre eller bredare stop.")
-    return (f"\n💰 Riskerar {risk_kr:,.0f} kr ({risk_pct:g}%) → köp för ca "
-            f"<b>{notional:,.0f} kr</b> ({share:.0f}% av kapitalet){warn}").replace(",", " ")
+    if amount is None:
+        return ("\n💡 Lägg till <code>1000kr</code> i kommandot så räknar jag ut vad du "
+                "riskerar i kronor (och visar P/L i kr framöver).")
+    risk_kr = amount * stop_dist
+    src = " (din gräns)" if chosen_risk else " (volanpassad)"
+    return (f"\n💰 Insats {_kr(amount)} kr · stoppen ligger {stop_dist*100:.1f}% bort{src}\n"
+            f"   → du riskerar <b>{_kr(risk_kr)} kr</b> om den träffas")
 
 
 def _correlation_warning(conn, coin_id: int, symbol: str) -> str:
@@ -167,17 +181,15 @@ def handle_command(conn, text: str) -> str:
     coin_ids = db.load_coin_ids(conn)
 
     if cmd in ("/start", "/help"):
-        cap = db.get_bot_state(conn, "capital")
-        cap_txt = (f"{float(cap.split(',')[0]):,.0f} kr, {cap.split(',')[1]}% risk".replace(",", " ")
-                   if cap else "ej satt")
         watched = sorted(c.symbol for c in config.UNIVERSE)
         return (
             "<b>Kommandon:</b>\n"
-            "/buy SOL 82 — bevaka SOL köpt på 82 (volanpassad stop)\n"
-            "/buy SOL 82 78 — med egen stop på 78\n"
-            "/sell SOL 85 — stäng bevakning (säljkurs valfri)\n"
-            "/positions (/innehav) — innehav med P/L\n"
-            f"/kapital 100000 1 — kapital + risk% för positionsstorlek ({cap_txt})\n"
+            "<code>/buy WLD 0.34</code> — bevaka, volanpassad stop\n"
+            "<code>/buy WLD 0.34 1000kr</code> — med insats → P/L i kronor\n"
+            "<code>/buy WLD 0.34 1000kr risk20</code> — stop sätts på −20%\n"
+            "<code>/buy WLD 0.34 0.30</code> — egen stop-kurs\n"
+            "<code>/sell WLD 0.36</code> — stäng bevakning\n"
+            "<code>/positions</code> (/innehav) — innehav med P/L\n"
             "<i>Lägg till ! sist för att kringgå priskontrollen.</i>\n\n"
             f"Bevakar {len(watched)} coins: {' '.join(watched)}\n"
             "<i>Jag kollar dina innehav varje timme och larmar vid stop, vikande topp "
@@ -186,36 +198,31 @@ def handle_command(conn, text: str) -> str:
         )
 
     if cmd in ("/kapital", "/capital"):
-        if len(parts) < 2:
-            cur = db.get_bot_state(conn, "capital")
-            return (f"Nuvarande: {cur.replace(',', ' kr, ')}% risk" if cur else
-                    "Inte satt. Skriv t.ex. <code>/kapital 100000 1</code> "
-                    "(100 000 kr, 1% risk per trade).")
-        try:
-            capital = _num(parts[1])
-            risk = _num(parts[2]) if len(parts) > 2 else 1.0
-        except ValueError:
-            return "Kunde inte tolka. Skriv: /kapital 100000 1"
-        if capital <= 0 or not (0 < risk <= 5):
-            return "Kapital måste vara > 0 och risk mellan 0 och 5%."
-        db.set_bot_state(conn, "capital", f"{capital},{risk}")
-        return (f"✅ Kapital {capital:,.0f} kr, risk {risk:g}% per trade "
-                f"({capital*risk/100:,.0f} kr).\n"
-                f"<i>Jag räknar nu ut köpbelopp åt dig vid varje /buy.</i>").replace(",", " ")
+        return ("Det kommandot finns inte längre — du anger insatsen per trade i stället:\n"
+                "<code>/buy WLD 0.34 1000kr</code> (eller lägg till <code>risk20</code> "
+                "för egen stop-gräns).")
 
     if cmd in ("/positions", "/pos", "/innehav"):
         holdings = db.load_open_holdings(conn)
         if not holdings:
             return "Inga bevakade innehav. Lägg till med t.ex. /buy SOL 82"
-        lines = ["<b>Dina innehav:</b>"]
+        lines, total_kr, total_in = ["<b>Dina innehav:</b>"], 0.0, 0.0
         for h in holdings:
             price = db.get_last_close(conn, h["coin_id"])
             pl = f" · nu {price:g} ({_fmt_pl(h['entry'], price)})" if price else ""
+            kr = ""
+            if price and h["amount"]:
+                gain = h["amount"] * (price / h["entry"] - 1)
+                total_kr += gain; total_in += h["amount"]
+                kr = f" <b>{gain:+,.0f} kr</b>".replace(",", " ")
             stop = f" · stop {h['stop']:g}" if h["stop"] else ""
             vol = _daily_vol(conn, h["coin_id"])
             vs = f" · ~{vol*100:.0f}%/d" if vol else ""
             alarm = " 🚨 UNDER STOP — överväg sälj!" if (price and h["stop"] and price <= h["stop"]) else ""
-            lines.append(f"• <b>{h['symbol']}</b> köpt {h['entry']:g}{pl}{stop}{vs}{alarm}")
+            lines.append(f"• <b>{h['symbol']}</b> köpt {h['entry']:g}{pl}{kr}{stop}{vs}{alarm}")
+        if total_in:
+            lines.append(f"\n<b>Totalt:</b> {_kr(total_in)} kr insatt · "
+                         f"{total_kr:+,.0f} kr ({total_kr/total_in*100:+.1f}%)".replace(",", " "))
         return "\n".join(lines)
 
     if cmd == "/buy":
@@ -228,11 +235,20 @@ def handle_command(conn, text: str) -> str:
         if db.get_open_holding(conn, cid):
             return f"{sym} bevakas redan — /sell {sym} först om du vill börja om."
         vol = _daily_vol(conn, cid)
+        parts, amount, chosen_risk = _parse_extras(parts)
         try:
             entry = _num(parts[2])
-            stop = _num(parts[3]) if len(parts) > 3 else _suggest_stop(entry, vol)[0]
-        except ValueError:
-            return "Kunde inte tolka priset. Skriv: /buy SOL 82 (eller /buy SOL 82 78)"
+            if chosen_risk:                       # "risk20" → stoppen härleds ur din gräns
+                stop = entry * (1 - chosen_risk)
+            elif len(parts) > 3:
+                stop = _num(parts[3])
+            else:
+                stop = _suggest_stop(entry, vol)[0]
+        except (ValueError, IndexError):
+            return ("Kunde inte tolka. Exempel:\n"
+                    "<code>/buy WLD 0.34</code>\n"
+                    "<code>/buy WLD 0.34 1000kr</code>\n"
+                    "<code>/buy WLD 0.34 1000kr risk20</code>")
         if stop >= entry:
             return f"Stoppen ({stop:g}) måste ligga UNDER köpkursen ({entry:g})."
         if not force:
@@ -240,13 +256,13 @@ def handle_command(conn, text: str) -> str:
             if warn:
                 return warn
         corr_warn = _correlation_warning(conn, cid, sym)
-        db.insert_holding(conn, cid, entry, stop)
+        db.insert_holding(conn, cid, entry, stop, amount)
         advice = _vol_advice(vol, entry, stop)
         oi = db.oi_change(conn, cid, 24)
         if oi is not None:
             mark, oitxt = scout.oi_label("turning_up", oi)
             advice += f"\n{mark} {oitxt} (senaste dygnet)"
-        advice += _position_advice(conn, entry, stop) + corr_warn
+        advice += _risk_line(entry, stop, amount, chosen_risk) + corr_warn
         return (
             f"✅ Bevakar <b>{sym}</b> från {entry:g}.\n"
             f"Stop: {stop:g} ({(stop/entry-1)*100:+.1f}%)"
@@ -276,6 +292,9 @@ def handle_command(conn, text: str) -> str:
                 return warn
         db.close_holding(conn, h["id"], price)
         pl = f" — resultat {_fmt_pl(h['entry'], price)} ({h['entry']:g} → {price:g})" if price else ""
+        if price and h["amount"]:
+            gain = h["amount"] * (price / h["entry"] - 1)
+            pl += f", <b>{gain:+,.0f} kr</b> på {_kr(h['amount'])} kr insats".replace(",", " ")
         return f"🔚 Slutar bevaka <b>{sym}</b>{pl}."
 
     return "Okänt kommando. /help visar vad jag kan."
