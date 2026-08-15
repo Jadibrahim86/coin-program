@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/check-docs.sh\"",
+            "shell": "bash",
+            "timeout": 15,
+            "statusMessage": "Kollar om dokumentationen hänger med"
+          }
+        ]
+      }
+    ]
+  }
+}

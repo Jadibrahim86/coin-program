@@ -1,84 +1,125 @@
 # Coin program
 
-Crypto swing-trading signalsystem. Se [PLAN.md](PLAN.md) för helheten och
-arkitekturen. Detta repo är just nu i **Fas 0–1**: databasschema + Python-ingestion
-av OHLCV och open interest.
+Personligt beslutsstöd för swing-trading i krypto. Bevakar marknaden och dina
+egna innehav, och pingar Telegram när något ovanligt händer eller när det kan
+vara läge att sälja.
+
+**Det ger inte köpråd och handlar inte åt dig.** Radarn är en strålkastare att
+granska själv — den missar mer än den träffar.
+
+> **Orientering för utveckling:** se [CLAUDE.md](CLAUDE.md) — arkitektur,
+> principer, kalibreringar och konventioner.
+> [PLAN.md](PLAN.md) är den ursprungliga byggplanen från juni och beskriver
+> inte nuläget.
+
+## Vad det gör
+
+| Jobb | Vad det larmar om |
+|---|---|
+| **Radar** ([scout.py](worker/scout.py)) | Tre volym-mönster: 🟢 vänder upp + volym · 🟡 faller + volym (kniv) · 🔴 säljvolym efter uppgång. Plus funding-extremer. Köp-flaggor tystas i chop/risk-off. |
+| **Exit-vakt** ([exit_watch.py](worker/exit_watch.py)) | Dina innehav: ❌ stop bruten · 📉 topp som viker (bara i verklig vinst) · 🔴 säljvolym. |
+| **Marknadslarm** ([stress.py](worker/stress.py)) | När marknaden beter sig extremt: brett fall, allt rör sig ihop, vilda rörelser, likvidationskaskad. |
+| **Veckorapport** ([report.py](worker/report.py)) | Söndagar: betygsätter systemets egna flaggor mot BTC. Självutvärdering, inte självberöm. |
+| **Telegram-bot** ([telegram_bot.py](worker/telegram_bot.py)) | `/buy` `/sell` `/positions` — du registrerar vad du köpt, boten bevakar det. |
+
+## Telegram-kommandon
+
+```
+/buy WLD 0.34                    bevaka, volanpassad stop
+/buy WLD 0.34 1000kr             + insats → P/L i kronor
+/buy WLD 0.34 1000kr risk20      stoppen härleds ur din risk-gräns (−20%)
+/buy WLD 0.34 0.30               egen stop-kurs
+/sell WLD 0.36                   stäng bevakning
+/positions  (/innehav)           innehav med P/L
+/help                            hjälp
+```
+
+Lägg till `!` sist för att kringgå priskontrollen (typo-skyddet).
+
+## Var det kör
+
+- **VPS** (Ubuntu, EU-region) kör [run_pipeline.sh](run_pipeline.sh) varje timme
+  via cron: `git pull` → hämta data → radar → exit-watch → stress →
+  veckorapport. Se [DEPLOY_VPS.md](DEPLOY_VPS.md).
+- **Telegram-boten** kör som systemd-tjänst ([coin-bot.service](coin-bot.service))
+  så `/buy` får svar direkt.
+- **Supabase (Postgres)** håller all data — schema i [db/schema.sql](db/schema.sql).
+- Kod uppdateras genom `git push`; VPS:en hämtar själv nästa timme.
+
+GitHub Actions är avvecklat ([DEPLOY.md](DEPLOY.md) sparas som referens).
+
+## Struktur
 
 ```
 coin program/
-├── PLAN.md            # planen (v2, omskopad efter granskning)
-├── db/
-│   └── schema.sql     # Postgres/Supabase-schema (Fas 0–1 aktivt + senare faser)
-└── worker/            # Python-datapipeline (ingestion)
-    ├── config.py      # universum, timeframes, filtertrösklar
-    ├── db.py          # Postgres-anslutning + upserts
-    ├── universe.py    # seed coins + point-in-time medlemskaps-snapshots
-    ├── ingest_ohlcv.py# OHLCV via CCXT + gapdetektering
-    ├── ingest_oi.py   # open interest + funding, aggregerat över venues
-    └── cli.py         # entrypoint (cron)
+├── CLAUDE.md           # orientering: arkitektur, principer, konventioner
+├── PLAN.md             # ursprunglig byggplan (historisk)
+├── run_pipeline.sh     # VPS-pulsen (cron, varje timme)
+├── coin-bot.service    # systemd-enhet för Telegram-boten
+├── db/schema.sql       # Postgres/Supabase-schema
+└── worker/
+    ├── config.py           # universum (34 coins), timeframes, börsval
+    ├── cli.py              # entrypoint för alla jobb
+    ├── db.py               # Postgres + idempotenta upserts
+    ├── features.py         # rena feature-funktioner (delas live/backtest)
+    ├── ingest_ohlcv.py     # OHLCV via CCXT (OKX)
+    ├── ingest_oi.py        # open interest + funding (binance+bybit+okx)
+    ├── scout.py            # radarn
+    ├── exit_watch.py       # exit-vakten
+    ├── stress.py           # marknadslarm
+    ├── report.py           # veckorapport
+    ├── telegram_bot.py     # kommandolyssnare (daemon)
+    ├── alerts.py           # Telegram-utskick
+    └── ...                 # backtest-/forskningsspåret, se nedan
 ```
 
-## Förutsättningar
-- **Python 3.11+** — är *inte* installerat på den här maskinen ännu.
-  Installera från [python.org](https://www.python.org/downloads/) eller Microsoft Store
-  (bocka i "Add python.exe to PATH").
-- En **Supabase**-databas (Postgres).
+## Universum
 
-## Setup
-1. Installera Python 3.11+.
-2. Skapa tabellerna: kör innehållet i [db/schema.sql](db/schema.sql) i Supabase SQL Editor
-   (eller `psql "$DATABASE_URL" -f db/schema.sql`).
-3. Kopiera `.env.example` → `.env` och fyll i `DATABASE_URL`
-   (Supabase → Project Settings → Database → Connection string).
-4. Installera beroenden:
-   ```powershell
-   cd worker
-   python -m venv .venv
-   .venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   ```
+34 coins, halal-filtrerade (PiF-grönlista), inga memecoins, alla på OKX, med
+tillräcklig dagsvolatilitet för swing. Urvalsreglerna och varför enskilda coins
+uteslutits står i kommentarerna i [config.py](worker/config.py).
 
-## Köra
+## Backtest-spåret — grinden är inte passerad
+
+Den ursprungliga strategi-idén (EMA/RSI/ATR-signal) skulle bevisa en edge mot
+baseline innan något byggdes ovanpå. **Den har inte klarat walk-forward /
+out-of-sample.** Därför är [live_signals.py](worker/live_signals.py),
+[positions.py](worker/positions.py) och `cli.py alert` märkta **EJ VALIDERAD**
+och ingår inte i produktionspipelinen.
+
+Radar-spåret uppstod som ersättning — det påstår sig inte ha en edge.
+
+```powershell
+python cli.py backtest --synthetic              # röktest av motorn, ingen DB
+python cli.py backtest --timeframe 4h --save    # mot DB-data
+python cli.py validate --timeframe 4h           # hävstång, per år, kostnadskänslighet
+```
+
+## Köra lokalt (Windows)
+
 ```powershell
 cd worker
-# --- Data (Fas 0–1) ---
-python cli.py seed-coins          # skriv startlistan till coins
-python cli.py snapshot-universe   # point-in-time medlemskaps-snapshot (CoinGecko)
-python cli.py ingest-ohlcv        # OHLCV 1h/4h/1d för hela universumet
-python cli.py ingest-oi           # open interest + funding (perp-coins)
-# --- Features + grinden (Fas 2–4) ---
-python cli.py compute-features --timeframe 4h   # beräkna & spara features
-python cli.py backtest --synthetic              # RÖKTESTA motorn utan DB
-python cli.py backtest --timeframe 4h --save    # backtest mot DB-data + spara
+.venv\Scripts\Activate.ps1
+python cli.py radar --timeframe 1h --no-send
+python cli.py exit-watch --no-send
+python cli.py stress --no-send
+python cli.py weekly-report --no-send --force
 ```
-Begränsa till vissa coins: `python cli.py ingest-ohlcv --symbols BTC ETH`
 
-**Börja med `backtest --synthetic`** — det kör hela kedjan (features → signal →
-event-driven motor → metrics mot baseline) på syntetisk data, så du kan verifiera att
-motorn hänger ihop innan Supabase/ingestion är på plats.
+**Använd alltid `--no-send` vid testning** — annars går larmet till riktig telefon.
 
-## Schemaläggning
-Kör på schema (Windows Task Scheduler, VPS-cron, eller Supabase Edge Function):
-`ingest-ohlcv` ~var 15:e min, `ingest-oi` ~var 5–15:e min, `snapshot-universe` 1×/dygn.
+Setup från noll: Python 3.11+, kör [db/schema.sql](db/schema.sql) i Supabase,
+kopiera `.env.example` → `.env`, sedan
+`python -m venv .venv && pip install -r worker/requirements.txt` och
+`python cli.py seed-coins`.
 
-## Medvetna begränsningar (se PLAN.md)
-- **Historisk OI** backfillas inte gratis — `ingest-oi` tar löpande snapshots framåt.
-  Aggregerad historisk OI kräver betald källa (Coinglass).
-- **Point-in-time-medlemskap** byggs framåt i tiden. Historisk backfill kräver historisk
-  mcap/volym.
-- `snapshot-universe` utvärderar mcap + volym; ålder och antal börser är ännu inte kopplade.
+## Medvetna begränsningar
 
-## Grinden (Fas 2–4) — byggd
-Features ([features.py](worker/features.py)), minimal signal ([signals.py](worker/signals.py))
-och en event-driven backtester ([backtest_engine.py](worker/backtest_engine.py)) med
-avgifter/funding/slippage, portfölj-equity-kurva och **baseline-jämförelse**
-([backtest_baseline.py](worker/backtest_baseline.py)): buy&hold BTC, buy&hold universum,
-och slumpmässig entry med samma riskhantering.
-
-**Beslutsregeln:** slår strategin baselines (särskilt Random+risk)? Om nej — bygg inget
-downstream (dashboard, signal-zoo, adaptivt lager). Edgen finns inte än.
-
-> **Status:** Python 3.12 är installerat i `worker/.venv`. `backtest --synthetic` är
-> **körd och verifierad** — hela kedjan (features → signal → motor → metrics → baseline)
-> kör end-to-end utan fel. Nästa steg: riktig data (Supabase + ingestion) och sedan
-> **walk-forward + out-of-sample** (§7.4) för den *riktiga* grinden.
+- **Historisk OI** backfillas inte — bara löpande snapshots framåt. Aggregerad
+  historik kräver betald källa (Coinglass).
+- **90 dygns default-backfill** för nya coins, för att hålla Supabase på
+  gratisnivån. Sätt `BACKFILL_START` i `.env` för djupare historik.
+- **Point-in-time-medlemskap** byggs framåt i tiden; `snapshot-universe`
+  utvärderar mcap + volym, men ålder och antal börser är inte kopplade än.
+- Trösklarna är kalibrerade på **få observationer**. De skrivs alltid ut i
+  meddelandena så att de går att fortsätta mäta.

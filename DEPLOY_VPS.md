@@ -1,11 +1,10 @@
-# VPS-distribution — full 18-coin-täckning + funding + valfri frekvens
+# VPS-distribution — full täckning + funding + valfri frekvens
 
-GitHubs gratis-moln blockeras av Binance (geo) → bara 11 coins och ingen funding. En
-liten **VPS i en Binance-vänlig region** (EU) löser allt på en gång: alla 18 coins,
-funding/OI direkt från Binance, och valfri körfrekvens. ~4–5 €/mån.
+GitHubs gratis-moln blockerades geografiskt av börserna → bara delvis täckning och ingen
+funding. En liten **VPS i EU-region** löser allt på en gång: hela universumet (34 coins),
+funding/OI från binance+bybit+okx, och valfri körfrekvens. ~4–5 €/mån.
 
-> När VPS:en kör: **stäng av GitHub-workflowen** (Actions → coin-signals → ⋯ → Disable),
-> annars får du dubbla alerts.
+> GitHub-workflowen är borttagen ur repot — VPS:en är enda köraren.
 
 ## 1. Hyr en VPS
 - T.ex. **Hetzner** CX22 (~4 €/mån) eller Contabo/DigitalOcean. Välj **Ubuntu 24.04** och en
@@ -42,7 +41,8 @@ DATABASE_URL=<samma som i din lokala .env>
 TELEGRAM_BOT_TOKEN=<samma som i din lokala .env>
 TELEGRAM_CHAT_ID=<samma som i din lokala .env>
 ```
-Spara (Ctrl+O, Enter, Ctrl+X). `OHLCV_EXCHANGE` lämnas bort → blir `binance` (alla 18 coins).
+Spara (Ctrl+O, Enter, Ctrl+X). `OHLCV_EXCHANGE` lämnas bort → blir `okx` (samma börs som
+du handlar på — blanda inte in volym från andra börser, trösklarna är kalibrerade på OKX).
 
 ## 5. Testa en gång
 ```bash
@@ -58,7 +58,8 @@ Lägg till längst ner (byt sökväg om annan):
 ```
 5 * * * * /root/coin-program/run_pipeline.sh >> /root/coin-program/cron.log 2>&1
 ```
-Klart — VPS:en kör nu radarn varje timme med alla 18 coins + funding, dygnet runt.
+Klart — VPS:en kör nu hela pulsen varje timme, dygnet runt: hämtar data, kör radarn,
+kollar dina innehav (exit-watch), marknadslarm och veckorapport på söndagar.
 
 **Vill du köra oftare än varje timme** (t.ex. var 15:e min): det kräver att vi även
 hämtar 15m-data och kör radarn på 15m. Säg till så lägger jag till det — VPS:en har inga
