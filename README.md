@@ -58,7 +58,7 @@ coin program/
 ├── coin-bot.service    # systemd-enhet för Telegram-boten
 ├── db/schema.sql       # Postgres/Supabase-schema
 └── worker/
-    ├── config.py           # universum (34 coins), timeframes, börsval
+    ├── config.py           # universum (44 coins), timeframes, börsval
     ├── cli.py              # entrypoint för alla jobb
     ├── db.py               # Postgres + idempotenta upserts
     ├── features.py         # rena feature-funktioner (delas live/backtest)

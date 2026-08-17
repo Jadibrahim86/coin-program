@@ -1,7 +1,7 @@
 # VPS-distribution — full täckning + funding + valfri frekvens
 
 GitHubs gratis-moln blockerades geografiskt av börserna → bara delvis täckning och ingen
-funding. En liten **VPS i EU-region** löser allt på en gång: hela universumet (34 coins),
+funding. En liten **VPS i EU-region** löser allt på en gång: hela universumet (44 coins),
 funding/OI från binance+bybit+okx, och valfri körfrekvens. ~4–5 €/mån.
 
 > GitHub-workflowen är borttagen ur repot — VPS:en är enda köraren.

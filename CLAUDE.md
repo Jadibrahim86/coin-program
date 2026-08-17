@@ -257,8 +257,8 @@ påstod "Fas 0–1, Python inte installerat" medan systemet låg i drift på en 
 Uppdatera hellre än att lita på dem:
 
 - `PLAN.md` — ursprunglig plan, beskriver inte live-spåret alls.
-- `DEPLOY_VPS.md` — säger "18 coins" och Binance som källa; det är 34 coins
-  och OKX nu.
+- `DEPLOY_VPS.md` — i övrigt rättad, men beskriver bara `ingest` + `radar` i
+  pipelinen; den kör numera även exit-watch, stress och weekly-report.
 - `.env.example` — säger att `OHLCV_EXCHANGE` defaultar till binance;
   `config.py` defaultar till okx.
 - `db/schema.sql` — kommentarerna delar in i "Fas 0–1 aktiva" vs "senare faser";
