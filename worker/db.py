@@ -447,19 +447,25 @@ def aggregate_oi_change(conn, hours: int = 24):
     return float(row[0]) / float(row[1]) - 1
 
 
-def load_flag_outcomes(conn, days: int = 30) -> list:
-    """[(symbol, coin_id, flag_type, ts, meta)] för loggade flaggor — veckorapporten."""
+RADAR_FLAG_TYPES = ("turning_up", "falling", "distribution")
+
+
+def load_flag_outcomes(conn, days: int = 30, flag_types=RADAR_FLAG_TYPES) -> list:
+    """[(symbol, coin_id, flag_type, ts, meta)] för loggade flaggor — veckorapporten.
+
+    flag_types går att byta för att utvärdera andra larm, t.ex. ('early_profit',).
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT c.symbol, ra.coin_id, ra.flag_type, ra.ts, ra.meta
             FROM radar_alerts ra JOIN coins c ON c.id = ra.coin_id
             WHERE ra.meta IS NOT NULL
-              AND ra.flag_type IN ('turning_up','falling','distribution')
+              AND ra.flag_type = ANY(%s)
               AND ra.ts >= now() - make_interval(days => %s)
             ORDER BY ra.ts
             """,
-            (days,),
+            (list(flag_types), days),
         )
         return cur.fetchall()
 

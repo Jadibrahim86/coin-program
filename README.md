@@ -16,8 +16,8 @@ granska själv — den missar mer än den träffar.
 
 | Jobb | Vad det larmar om |
 |---|---|
-| **Radar** ([scout.py](worker/scout.py)) | Tre volym-mönster: 🟢 vänder upp + volym · 🟡 faller + volym (kniv) · 🔴 säljvolym efter uppgång. Plus funding-extremer. Köp-flaggor tystas i chop/risk-off. |
-| **Exit-vakt** ([exit_watch.py](worker/exit_watch.py)) | Dina innehav: ❌ stop bruten · 📉 topp som viker (bara i verklig vinst) · 🔴 säljvolym. |
+| **Radar** ([scout.py](worker/scout.py)) | 🟢 coin som vänder upp med volym bakom sig — möjligt köpläge. Tystas i chop/risk-off, och coins du redan äger filtreras bort. |
+| **Exit-vakt** ([exit_watch.py](worker/exit_watch.py)) | Dina innehav: 🟠 vinsten vänder (tidigt, medan du ligger plus) · ❌ stop bruten · 📉 topp som viker · 🔴 säljvolym. |
 | **Marknadslarm** ([stress.py](worker/stress.py)) | När marknaden beter sig extremt: brett fall, allt rör sig ihop, vilda rörelser, likvidationskaskad. |
 | **Veckorapport** ([report.py](worker/report.py)) | Söndagar: betygsätter systemets egna flaggor mot BTC. Självutvärdering, inte självberöm. |
 | **Telegram-bot** ([telegram_bot.py](worker/telegram_bot.py)) | `/buy` `/sell` `/positions` — du registrerar vad du köpt, boten bevakar det. |
@@ -75,9 +75,10 @@ coin program/
 
 ## Universum
 
-34 coins, halal-filtrerade (PiF-grönlista), inga memecoins, alla på OKX, med
-tillräcklig dagsvolatilitet för swing. Urvalsreglerna och varför enskilda coins
-uteslutits står i kommentarerna i [config.py](worker/config.py).
+44 coins, halal-filtrerade (PiF-grönlista), inga memecoins, alla på OKX, med
+tillräcklig **uppmätt** dagsvolatilitet för swing och perp på minst en OI-börs.
+Urvalsreglerna och varför enskilda coins uteslutits står i kommentarerna i
+[config.py](worker/config.py).
 
 ## Backtest-spåret — grinden är inte passerad
 

@@ -58,8 +58,8 @@ def build(conn, days: int = LOOKBACK_DAYS) -> str:
          f"Positivt = flaggan slog marknaden.</i>"]
 
     titles = {"turning_up": "🟢 Vänder upp + volym",
-              "falling": "🟡 Faller + volym",
-              "distribution": "🔴 Säljvolym"}
+              "falling": "🟡 Faller + volym <i>(loggas, skickas ej)</i>",
+              "distribution": "🔴 Säljvolym <i>(loggas, skickas ej)</i>"}
     for ft, title in titles.items():
         lines = []
         for b in ("OI upp", "OI neutral", "OI ner"):
@@ -71,6 +71,26 @@ def build(conn, days: int = LOOKBACK_DAYS) -> str:
         if lines:
             L.append(f"\n<b>{title}</b>")
             L.extend(lines)
+
+    # 🟠 Tidigt vinstlarm: här är frågan inte "slog den BTC" utan "hade jag rätt i
+    # att varna". Mäts därför på ABSOLUT prisrörelse efter larmet — föll priset var
+    # det rätt att ta vinsten, steg det larmade vi för tidigt.
+    early = db.load_flag_outcomes(conn, days, flag_types=("early_profit",))
+    if early:
+        moves = []
+        for sym, cid, ft, ts, meta in early:
+            r = fwd(cid, sym, ts, HORIZON_H)
+            if r is not None:
+                moves.append((sym, float(r), (meta or {}).get("pl")))
+        if moves:
+            ratt = [m for m in moves if m[1] < 0]
+            L.append(f"\n<b>🟠 Tidigt vinstlarm</b> (nytt 2026-08-17)")
+            L.append(f"  {len(ratt)} av {len(moves)} gånger föll priset efter larmet "
+                     f"({HORIZON_H}h)")
+            snitt = sum(m[1] for m in moves) / len(moves) * 100
+            L.append(f"  snittrörelse efter larm: {snitt:+.1f}%")
+            L.append(f"  <i>Negativt snitt = larmet varnade i tid. Positivt = det "
+                     f"larmade för tidigt och du hade tjänat på att sitta kvar.</i>")
 
     closed = db.load_closed_holdings(conn, days)
     if closed:

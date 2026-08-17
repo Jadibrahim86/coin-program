@@ -55,6 +55,8 @@ class Coin:
 
 # Startlista (L1/L2/infrastruktur/DeFi). Filtret avgör sen medlemskap över tid.
 UNIVERSE = [
+    # 44 coins. Urvalsreglerna (halal-grönt, ingen memecoin, OKX-spot, mätt
+    # dagsvol >= ~2.7%, perp på minst en OI-venue) står i CLAUDE.md.
     Coin("BTC",  "Bitcoin",    "L1",     "bitcoin",                  "BTC/USDT",  "BTC/USDT:USDT"),
     Coin("ETH",  "Ethereum",   "L1",     "ethereum",                 "ETH/USDT",  "ETH/USDT:USDT"),
     Coin("SOL",  "Solana",     "L1",     "solana",                   "SOL/USDT",  "SOL/USDT:USDT"),
@@ -97,4 +99,29 @@ UNIVERSE = [
     Coin("CHZ",  "Chiliz",       "fan",      "chiliz",                   "CHZ/USDT", "CHZ/USDT:USDT"),
     Coin("ICP",  "Internet Computer", "L1",  "internet-computer",        "ICP/USDT", "ICP/USDT:USDT"),
     Coin("FIL",  "Filecoin",     "storage",  "filecoin",                 "FIL/USDT", "FIL/USDT:USDT"),
+    # Utökning 2026-08-17: halal-gröna ("Comfortable") ur PiF rank 101–200.
+    # Urvalet gjordes på MÄTT dagsvolatilitet (30 dygn OKX-data, samma
+    # features.daily_vol som boten visar), inte på gissning:
+    #   SAFE 5.3% · RVN 4.7% · CFX 4.5% · JTO 4.5% · ETHFI 4.5%
+    #   ORDI 4.2% · ZRO 4.0% · EIGEN 3.8% · VIRTUAL 3.5% · STX 3.4%
+    # Alla har perp på minst en OI-venue → open interest fungerar (SAFE bara på
+    # binance+bybit, inte OKX — ingest_oi aggregerar ändå).
+    # Medvetet UTESLUTNA fastän de var volatilast: XCH 8.2% och CSPR 8.0% saknar
+    # perp på alla tre börserna (ingen OI alls, som LEO) och 2.5×8% = 20% stop
+    # spränger STOP_MAX på 15% → stoppen hade hamnat i brusfältet. ZBCN 4.4% är
+    # mikrocap (~0.0016) med två Zebec-tokens i listan, dvs pågående migration.
+    # Övriga bortsorterade: memecoins (PENGU/BONK/FLOKI/APEPE — egen regel före
+    # halal-grönt), stables (EURC/FDUSD), wrappers och staked-derivat (METH/cbETH/
+    # osETH/MSOL/sAVAX m.fl.), LUNC (död kedja), samt ~24 som saknas på OKX
+    # (CAKE/AERO/VET/BSV/GNO/DCR/RUNE/AKT m.fl.).
+    Coin("SAFE",    "Safe",              "wallet",  "safe",                  "SAFE/USDT",    "SAFE/USDT:USDT"),
+    Coin("RVN",     "Ravencoin",         "L1",      "ravencoin",             "RVN/USDT",     "RVN/USDT:USDT"),
+    Coin("CFX",     "Conflux",           "L1",      "conflux-token",         "CFX/USDT",     "CFX/USDT:USDT"),
+    Coin("JTO",     "Jito",              "DeFi",    "jito-governance-token", "JTO/USDT",     "JTO/USDT:USDT"),
+    Coin("ETHFI",   "ether.fi",          "DeFi",    "ether-fi",              "ETHFI/USDT",   "ETHFI/USDT:USDT"),
+    Coin("ORDI",    "ORDI",              "brc20",   "ordinals",              "ORDI/USDT",    "ORDI/USDT:USDT"),
+    Coin("ZRO",     "LayerZero",         "interop", "layerzero",             "ZRO/USDT",     "ZRO/USDT:USDT"),
+    Coin("EIGEN",   "EigenCloud",        "infra",   "eigenlayer",            "EIGEN/USDT",   "EIGEN/USDT:USDT"),
+    Coin("VIRTUAL", "Virtuals Protocol", "AI",      "virtual-protocol",      "VIRTUAL/USDT", "VIRTUAL/USDT:USDT"),
+    Coin("STX",     "Stacks",            "L2",      "blockstack",            "STX/USDT",     "STX/USDT:USDT"),
 ]

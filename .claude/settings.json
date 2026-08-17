@@ -1,4 +1,18 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(./.venv/Scripts/python.exe C:/Users/jagua/AppData/Local/Temp/claude/c--Users-jagua-Desktop-coin-program/28896b72-651f-4965-a371-3cf0ff6f6be1/scratchpad/vol_kandidater.py)",
+      "Bash(./.venv/Scripts/python.exe cli.py radar --timeframe 1h --no-send)",
+      "Bash(./.venv/Scripts/python.exe cli.py exit-watch --no-send)",
+      "Bash(./.venv/Scripts/python.exe cli.py weekly-report --no-send --force)",
+      "Bash(./.venv/Scripts/python.exe C:/Users/jagua/AppData/Local/Temp/claude/c--Users-jagua-Desktop-coin-program/28896b72-651f-4965-a371-3cf0ff6f6be1/scratchpad/test_early.py)",
+      "Bash(./.venv/Scripts/python.exe cli.py seed-coins)",
+      "Bash(./.venv/Scripts/python.exe cli.py ingest-ohlcv --symbols SAFE RVN CFX JTO ETHFI ORDI ZRO EIGEN VIRTUAL STX)",
+      "Bash(./.venv/Scripts/python.exe cli.py ingest-oi --symbols SAFE RVN CFX JTO ETHFI ORDI ZRO EIGEN VIRTUAL STX)",
+      "Bash(./.venv/Scripts/python.exe cli.py stress --no-send)"
+    ]
+  },
   "hooks": {
     "Stop": [
       {

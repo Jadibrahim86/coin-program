@@ -9,10 +9,15 @@ systemet **är idag**.
 Ett personligt beslutsstöd för swing-trading i krypto. Det är **inte** en
 autotrader och ger **inte** köpråd. Det gör två saker:
 
-1. **Bevakar marknaden** och pingar Telegram när något ovanligt händer
-   (volym-mönster, funding-extremer, marknadsstress).
+1. **Letar möjliga köplägen** och pingar Telegram när ett coin vänder upp med
+   volym bakom sig — plus marknadslarm när hela marknaden beter sig extremt.
 2. **Bevakar dina innehav** som du själv registrerar via Telegram, och larmar
-   när det kan vara läge att sälja (stop bruten, topp som viker, säljvolym).
+   när det kan vara läge att sälja (vinsten vänder, stop bruten, topp som viker,
+   säljvolym).
+
+**Användaren går bara long och shortar aldrig.** Därför är ett fallande coin bara
+intressant om han redan äger det — och då är det exit-vaktens jobb, inte radarns.
+Det styr vad som får skickas (se SEND_SECTIONS nedan).
 
 Användaren är privatperson, inte kvant. Allt som skickas ut ska gå att förstå
 utan finansjargong, på svenska, och alltid säga vad det *inte* vet.
@@ -71,9 +76,42 @@ eftersom OI ska spegla hela marknaden, inte en börs.
 Historisk OI backfillas inte — bara löpande snapshots framåt. Aggregerad
 historik kräver betald källa (Coinglass).
 
+## Vad som skickas — och vad som medvetet tystats
+
+Ändrat 2026-08-17 efter att användaren gick igenom en månads utskick. Bakgrunden
+står i koden; kortversionen:
+
+| Larm | Var | Skickas? |
+|---|---|---|
+| 🟢 Vänder upp + volym | `scout.py` | **Ja** — innehav filtreras bort |
+| 🟡 Faller + volym | `scout.py` | Nej — loggas för mätning |
+| 🔴 Säljvolym (radarn) | `scout.py` | Nej — loggas; dubblerade exit-vakten |
+| 💰 Funding-extremer | `scout.py` | **Borttaget** som eget utskick |
+| 🟠 Vinsten vänder | `exit_watch.py` | **Ja** — nytt |
+| ❌ Stop bruten · 📉 Trail · 🔴 Säljvolym på innehav | `exit_watch.py` | Ja |
+| 🌩️ Marknadslarm · 📊 Veckorapport | `stress.py` · `report.py` | Ja |
+
+`scout.SEND_SECTIONS` styr vilka mönster som går ut. Alla tre klassas och loggas
+fortfarande till `radar_alerts` (med `meta.sent`) så mätserien inte bryts — lägg
+tillbaka `"falling"`/`"distribution"` där för att få dem igen.
+
+Funding lever kvar som en **rad på 🟢-flaggan** (`scout.funding_line`) i stället
+för ett eget utskick: en lista på coins med extrem funding gav inget för någon som
+bara köper spot, och INJ låg kroniskt extrem. Märkt "ej mätt" — vi har ingen
+mätning som säger att funding förutsäger något.
+
+Det viktiga larmet är **🟠 "vinsten vänder"**. Det löser användarens största
+klagomål: han låg några procent plus, positionen vände, och det *enda* larmet kom
+vid stop-brottet på −7%. Orsaken var att `PROFIT_ARM = 1.06` aldrig nåddes
+(CHZ/ATOM/TAO toppade under +6%). Lösningen är **inte** att sänka `PROFIT_ARM` —
+det var den nivån som kapade vinnarna i juli — utan ett eget larm som kräver
+*bevis*: du ligger ≥ +2% **och** volymen är ≥ 4× snittet **och** momentum viker
+(volskalat). Volymkravet är det som skiljer det från juli-larmen, som gick på ren
+prisrörelse och tjöt på brus.
+
 ## Universum
 
-34 coins i `config.UNIVERSE`. Urvalsregler som gäller:
+44 coins i `config.UNIVERSE`. Urvalsregler som gäller:
 
 - **Halal-filtrerat** (Practical Islamic Finance-grönlista). AAVE togs bort
   2026-07-19 för att den var "Uncomfortable". Detta är ett hårt krav — föreslå
@@ -81,9 +119,22 @@ historik kräver betald källa (Coinglass).
 - Inga memecoins (DOGE/SHIB/PEPE), inga stables/wrappers, inget guld (XAUT/PAXG).
 - Måste finnas på **OKX** (flera annars intressanta coins är uteslutna just
   därför — se kommentarerna i `config.py`).
-- Dagsvolatilitet ≳ 2.7% — för lugna coins duger inte för swing.
+- Dagsvolatilitet ≳ 2.7% — för lugna coins duger inte för swing. **Mät den, gissa
+  inte**: urvalet 2026-08-17 gjordes på 30 dygns OKX-data genom
+  `features.daily_vol`, samma mått boten visar i `/buy`.
+- **Perp på minst en OI-venue** (binance/bybit/okx). XCH och CSPR var listans
+  volatilaste (8%/dag) men uteslöts just därför — utan perp finns ingen OI, och
+  OI är vad 🟠-larmet läser.
+- Rimlig storlek och ingen pågående token-migration. ZBCN uteslöts som mikrocap
+  med två Zebec-tokens på halal-listan samtidigt.
 
-LEO saknar perp (`perp=None`) → ingen OI/funding för den.
+LEO saknar perp (`perp=None`) → ingen OI/funding för den. SAFE har perp men
+Binance/Bybit rapporterar inget USD-värde för den, så den visar "OI saknas" —
+funding fungerar däremot.
+
+Notera: OKX ger bara ~300 bars vid första hämtningen av 1h, dvs ~12.5 dygn. Det
+räcker över `scout._snapshot`-kravet (250 bars), så nya coins fungerar direkt och
+historiken växer timvis.
 
 ## Telegram-kommandon
 
@@ -116,6 +167,16 @@ som säger när och mot vad den kalibrerades. Exempel:
 
 Om du ändrar en sådan konstant: säg vad den nya nivån bygger på, och uppdatera
 kommentaren. Att bara "skruva lite" raderar mätningen som ligger bakom.
+
+**Undantag som är ärligt märkt:** `EARLY_*` i `exit_watch.py` (🟠-larmet) är
+*inte* mätt mot utfall — de kommer ur användarens uttalade preferens ("jag tar
+gärna 3–5%") och ur hur CHZ/ATOM/TAO såg ut innan de vände. Veckorapporten mäter
+dem nu (`early_profit`-sektionen: föll priset efter larmet eller steg det?).
+Justera dem när det finns siffror, inte innan.
+
+Mätt läge 2026-08-16 att ha i huvudet: 🟢-flaggan går **sämre än BTC** i alla tre
+OI-grupper (−0.5 till −1.5% på 48h, n=26), och OI separerar ingenting. Föreslå
+inte fler coins eller fler signaler som om ingången vore löst — det är den inte.
 
 `radar_alerts.meta` loggar vad varje flagga byggde på (volym, OI, regim, pris)
 just för att kunna utvärdera i efterhand — `report.py` läser det. Lägg till

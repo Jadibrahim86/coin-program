@@ -1,14 +1,24 @@
-"""Volym-radar (bevakning, EJ råd) — tre volym-mönster, separat märkta.
+"""Volym-radar (bevakning, EJ råd) — hittar möjliga KÖPLÄGEN.
 
   🟢 Vänder UPP + volym   → coinet har börjat röra sig upp och volym bekräftar (AVAX-mönstret)
-  🟡 Faller + volym       → volym medan det fortfarande faller (ofta FALLANDE KNIV — riskabelt)
-  🔴 Säljvolym efter uppgång → coinet steg, vänder ner med volym (möjlig distribution/topp)
 
-Skillnaden 🟢 vs 🟡 = KORT-momentum (har det vänt upp, eller faller det än). Det var precis
-det som skiljde AVAX (vände upp, +10%) från DOT (föll vidare, kniv) i din verkliga data.
+Två mönster klassas fortfarande och LOGGAS för utvärdering men skickas inte längre
+(se SEND_SECTIONS):
 
-Ärligt: även 🟢 missar mer än den träffar — strålkastare att GRANSKA SJÄLV, inte autoköp.
-Dedup hindrar upprepning av samma coin+mönster inom DEDUP_HOURS.
+  🟡 Faller + volym       → volym medan det fortfarande faller (fallande kniv)
+  🔴 Säljvolym efter uppgång → coinet steg, vänder ner med volym
+
+Varför de tystades 2026-08-17: användaren går bara long och shortar aldrig, så ett
+coin som faller är bara intressant om han redan äger det — och då är det
+`exit_watch.py` som ska larma, inte radarn. 🔴 på ett innehav dubblerade dessutom
+exit-vaktens eget säljvolym-larm. Kvar i radarn: köplägen, inget annat.
+
+Innehav filtreras bort ur 🟢 — ett coin du redan äger är inget nytt köpläge
+(ZEC flaggades 4/4 medan användaren låg +4.6% i den och nästan köpte igen).
+
+Ärligt: även 🟢 missar mer än den träffar, och är MÄTT NEGATIV mot BTC
+(−0.5 till −1.5% på 48h, n=26 i veckorapporten 2026-08-16). Strålkastare att
+GRANSKA SJÄLV, inte autoköp. Dedup hindrar upprepning inom DEDUP_HOURS.
 """
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -31,7 +41,11 @@ OVEREXTENDED = 0.20      # hoppa 🟢 om redan upp >20% på 5d (för sent)
 FUNDING_EXTREME = 0.0003
 FUNDING_MAX_AGE_H = 6
 DEDUP_HOURS = 8
-FUNDING_DEDUP_HOURS = 24  # kronisk extrem funding (t.ex. INJ) → max en alert per dygn
+
+# Vilka mönster som SKICKAS. Alla tre klassas och loggas fortfarande till
+# radar_alerts så veckorapporten kan fortsätta mäta dem — men bara dessa går ut
+# till telefonen. Lägg tillbaka "falling"/"distribution" här för att få dem igen.
+SEND_SECTIONS = ("turning_up",)
 
 # --- Marknadsregim (filtrerar 🟢) --------------------------------------------
 # Mätning 2026-07-25: 🟢-flaggor gav -1.4%/24h i en platt vecka. Uppdelat på
@@ -113,7 +127,15 @@ def oi_label(kind: str, oi) -> tuple:
     """(markering, kort_text) för ett mönster givet OI-förändringen. Se OI_-kommentaren."""
     if oi is None:
         return "", "OI saknas"
-    pct = f"{oi*100:+.0f}%"
+    # Avrundningen fick texten att motsäga sig själv: 1.7% skrevs "+2%" och
+    # underkändes i samma rad ("OI +2% — ingen bekräftelse"), och 0.001 blev "-0%".
+    # En decimal under 10% och ord för det som ligger still.
+    if abs(oi) < 0.005:
+        pct = "oförändrad"
+    elif abs(oi) < 0.10:
+        pct = f"{oi*100:+.1f}%"
+    else:
+        pct = f"{oi*100:+.0f}%"
     if kind == "turning_up":
         if oi >= OI_STRONG:
             return "✅✅", f"OI {pct} — nya pengar in (starkt)"
@@ -169,14 +191,34 @@ def market_regime(conn, coin_ids: dict) -> dict:
     return {"label": f"trendande (eff {eff:.2f}, {REGIME_REF} {chg*100:+.1f}%)", "allow_long": True, "eff": eff, "chg": chg}
 
 
-def _funding_flags(conn) -> list:
-    out, now = [], datetime.now(timezone.utc)
+def _funding_map(conn) -> dict:
+    """{symbol: funding} för FÄRSKA och EXTREMA värden.
+
+    Det egna funding-utskicket är borta (2026-08-17): en lista på coins med
+    extrem funding gav inget för någon som bara köper och säljer spot, och INJ
+    låg kroniskt extrem så den pingade i praktiken varje dygn. Funding visas i
+    stället på det 🟢-coin man faktiskt överväger, där den kan betyda något.
+    """
+    out, now = {}, datetime.now(timezone.utc)
     for sym, funding, ts in db.load_latest_funding(conn):
         if funding is None or ts is None:
             continue
         if (now - ts).total_seconds() / 3600 <= FUNDING_MAX_AGE_H and abs(funding) >= FUNDING_EXTREME:
-            out.append((sym, float(funding)))
-    return sorted(out, key=lambda x: -abs(x[1]))
+            out[sym] = float(funding)
+    return out
+
+
+def funding_line(funding) -> str | None:
+    """Förklarar extrem funding för en KÖPARE. EJ MÄTT som edge — ren kontext."""
+    if funding is None:
+        return None
+    pct = f"{funding*100:+.3f}%"
+    if funding < 0:
+        return (f"      💰 Funding {pct} — shortarna betalar longarna, ovanligt "
+                f"många ligger kort. Vänder det upp kan de tvingas köpa tillbaka. "
+                f"<i>(ej mätt)</i>")
+    return (f"      💰 Funding {pct} — longarna betalar shortarna, trängd "
+            f"köpsida. Sen i rörelsen snarare än tidig. <i>(ej mätt)</i>")
 
 
 def run(conn, timeframe: str = "1h", send: bool = True) -> None:
@@ -204,32 +246,39 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         suppressed = len(buckets["turning_up"])
         buckets["turning_up"] = []
 
+    # Innehav är inga köplägen — exit_watch sköter dem. Utan detta flaggades ZEC
+    # 4/4 som "start på rörelse" medan användaren redan låg +4.6% i den.
+    held = {h["coin_id"] for h in db.load_open_holdings(conn)}
+    owned = [s["sym"] for s in buckets["turning_up"] if s["cid"] in held]
+    buckets["turning_up"] = [s for s in buckets["turning_up"] if s["cid"] not in held]
+
     recent = db.recent_radar_alerts(conn, DEDUP_HOURS)
     for k in buckets:
         buckets[k] = sorted((s for s in buckets[k] if (s["cid"], k) not in recent),
                             key=lambda s: -s["vol_ratio"])
-    # Dedup funding med eget, längre fönster — kronisk extrem funding (t.ex. INJ)
-    # ska inte upprepas varje timme, max en gång per dygn.
-    recent_funding = db.recent_radar_alerts(conn, FUNDING_DEDUP_HOURS)
-    funding = [(sym, fr) for sym, fr in _funding_flags(conn)
-               if (coin_ids.get(sym), "funding") not in recent_funding]
 
-    if not (any(buckets.values()) or funding):
+    sent = {k: v for k, v in buckets.items() if k in SEND_SECTIONS and v}
+    if not sent:
         extra = f" ({suppressed} 🟢 tystade — {regime['label']})" if suppressed else ""
+        if owned:
+            extra += f" ({', '.join(owned)} flaggade men ägs redan)"
         print(f"Inget nytt över trösklarna — inget skickat.{extra}")
+        _log_flags(conn, buckets, regime, send)
         return
+
+    funding = _funding_map(conn)
 
     L = [f"📡 <b>VOLYM-RADAR</b> ({timeframe}, bevakning – ej råd) — {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC",
          f"<i>Marknad: {regime['label']}</i>"]
     if suppressed:
         L.append(f"<i>({suppressed} köp-flagga(or) tystad — köpsignaler har historiskt "
                  f"failat i det här marknadsläget)</i>")
-    for k in ("turning_up", "falling", "distribution"):
-        if not buckets[k]:
+    for k in SEND_SECTIONS:
+        if k not in sent:
             continue
         icon, title, note = SECTIONS[k]
         L.append(f"\n{icon} {title}:")
-        for s in buckets[k][:6]:
+        for s in sent[k][:6]:
             rs = s.get("rs_btc")
             rs_txt = f" · vs BTC {rs*100:+.0f}%" if rs is not None else ""
             if k == "turning_up":
@@ -238,6 +287,9 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
                 L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/4{late}")
                 L.extend(rows)
                 L.append(f"      24h {s['mom24']*100:+.0f}%{rs_txt}")
+                fl = funding_line(funding.get(s["sym"]))
+                if fl:
+                    L.append(fl)
             else:
                 mark, oitxt = oi_label(k, s["oi_chg"])
                 L.append(f"  • {mark} <b>{s['sym']}</b> ~{s['price']:g}: {s['vol_ratio']:.1f}× volym, "
@@ -248,22 +300,33 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         if k == "turning_up":
             L.append("  <i>↳ ⭐ = hur många av volym / OI / 5d-trend / marknadsläge som drar "
                      "åt samma håll. 4/4 är det starkaste läget vi kan visa — inte en köporder. "
-                     "Mätt: fler stjärnor har hittills gett bättre utfall, men på få observationer.</i>")
-    if funding:
-        L.append("\n💰 <b>Funding-extremer:</b> " + "   ".join(f"{sym} {fr*100:+.3f}%" for sym, fr in funding[:8]))
+                     "Mätt hittills: flaggan går i snitt SÄMRE än BTC, så läs den som "
+                     "'titta här', inte 'köp här'.</i>")
+    if owned:
+        L.append(f"\n<i>({', '.join(owned)} flaggades också men du äger dem redan — "
+                 f"de bevakas av exit-vakten.)</i>")
     L.append("\n<i>Strålkastare att granska själv — inte köp/sälj. Fler missar än träffar; din bedömning avgör.</i>")
     text = "\n".join(L)
 
     print(text)
     if send:
         alerts.send(text)
-        db.record_radar_alerts(
-            conn,
-            [(s["cid"], k, {"price": s["price"], "vol_ratio": round(s["vol_ratio"], 1),
-                            "oi_chg": s["oi_chg"], "mom24": s["mom24"],
-                            "regime": regime["label"]})
-             for k in buckets for s in buckets[k]]
-            + [(coin_ids[sym], "funding", {"funding": fr})
-               for sym, fr in funding if sym in coin_ids],
-        )
-        print("\n[skickat + flaggor registrerade för dedup]")
+        print("\n[skickat]")
+    _log_flags(conn, buckets, regime, send)
+
+
+def _log_flags(conn, buckets: dict, regime: dict, send: bool) -> None:
+    """Loggar ALLA klassade mönster till radar_alerts — även de som inte skickas.
+
+    Dedupen och veckorapporten läser härifrån. 🟡/🔴 loggas fortfarande så att
+    mätserien inte bryts den dag vi vill utvärdera dem igen, men de går inte ut.
+    """
+    if not send:
+        return
+    db.record_radar_alerts(
+        conn,
+        [(s["cid"], k, {"price": s["price"], "vol_ratio": round(s["vol_ratio"], 1),
+                        "oi_chg": s["oi_chg"], "mom24": s["mom24"],
+                        "regime": regime["label"], "sent": k in SEND_SECTIONS})
+         for k, rows in buckets.items() for s in rows],
+    )
