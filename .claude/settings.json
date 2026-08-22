@@ -10,7 +10,8 @@
       "Bash(./.venv/Scripts/python.exe cli.py seed-coins)",
       "Bash(./.venv/Scripts/python.exe cli.py ingest-ohlcv --symbols SAFE RVN CFX JTO ETHFI ORDI ZRO EIGEN VIRTUAL STX)",
       "Bash(./.venv/Scripts/python.exe cli.py ingest-oi --symbols SAFE RVN CFX JTO ETHFI ORDI ZRO EIGEN VIRTUAL STX)",
-      "Bash(./.venv/Scripts/python.exe cli.py stress --no-send)"
+      "Bash(./.venv/Scripts/python.exe cli.py stress --no-send)",
+      "Bash(git push *)"
     ]
   },
   "hooks": {
