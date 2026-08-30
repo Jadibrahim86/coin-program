@@ -89,7 +89,12 @@ BARS_PER_DAY = {"5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 
 SECTIONS = {
     "turning_up": ("🟢", "<b>Vänder upp + volym</b> (start på rörelse?)",
-                   "coinet har börjat röra sig upp och volym bekräftar — mönstret som funkade (AVAX). Granska chart själv."),
+                   # "mönstret som funkade (AVAX)" stod här från juni 2026 till
+                   # 2026-08-30. Det var fel på två sätt: AVAX-traden gick -5.2%,
+                   # och raden om tidigare utfall står numera direkt ovanför och
+                   # kan säga -0.5% i samma andetag. Ett utskick får inte
+                   # motsäga sin egen mätning.
+                   "volym bekräftar att något händer i coinet — men flaggan missar oftare än den träffar. Granska chart själv."),
     "falling": ("🟡", "<b>Faller + volym</b> (botten? ofta KNIV – var försiktig)",
                 "volym medan det fortfarande faller — fångar ofta fallande knivar. Vänta hellre på vändning än att fånga."),
     "distribution": ("🔴", "<b>Säljvolym efter uppgång</b> (möjlig distribution – topp?)",
@@ -291,7 +296,14 @@ def market_regime(conn, coin_ids: dict) -> dict:
         return {"label": f"risk-off ({REGIME_REF} {chg*100:+.1f}% 24h)", "allow_long": False, "eff": eff, "chg": chg}
     if eff is not None and eff < CHOP_MAX:
         return {"label": f"hackig/chop (eff {eff:.2f})", "allow_long": False, "eff": eff, "chg": chg}
-    return {"label": f"trendande (eff {eff:.2f}, {REGIME_REF} {chg*100:+.1f}%)", "allow_long": True, "eff": eff, "chg": chg}
+    # Etiketten skiljer nu på stark och svag trend. Rubriken sa tidigare
+    # "trendande" vid eff 0.46 medan kriteriet nedanför underkände samma siffra
+    # för att den är under 0.55 — två rader i samma utskick som sa emot varandra.
+    # OBS: bara texten, allow_long är oförändrat (CHOP_MAX styr fortfarande).
+    stark = eff >= STRONG_TREND
+    ord_ = "stark trend" if stark else "svag trend"
+    return {"label": f"{ord_} (eff {eff:.2f}, {REGIME_REF} {chg*100:+.1f}%)",
+            "allow_long": True, "eff": eff, "chg": chg}
 
 
 # --- Marknadsläge: spelar coinvalet roll just nu? ----------------------------
@@ -438,11 +450,12 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
                          f"      {oitxt}")
         L.append(f"  <i>↳ {note}</i>")
         if k == "turning_up":
-            L.append("  <i>↳ ⭐ = de två kriterier som MÄTBART skiljer utfall: trendstyrka "
-                     "i marknaden och volym. Var fyra tidigare, men OI och 5d-trend "
-                     "separerade ingenting (n=93) och togs bort — fyra kryss varav två "
-                     "var dekoration gjorde betyget missvisande. Raden om tidigare utfall "
-                     "räknas om varje körning ur systemets egna flaggor.</i>")
+            # Kort med flit: förklaringen står på varje utskick, så den får inte
+            # vara längre än innehållet. Historiken bakom (varför fyra stjärnor
+            # blev två) hör hemma i CLAUDE.md, inte i din telefon varje timme.
+            L.append("  <i>↳ ⭐ = de två kriterier som mätbart skiljer utfall: "
+                     "trendstyrka och volym. ⚠️-raden är flaggtypens egen historik, "
+                     "omräknad varje körning.</i>")
     if owned:
         L.append(f"\n<i>({', '.join(owned)} flaggades också men du äger dem redan — "
                  f"de bevakas av exit-vakten.)</i>")
