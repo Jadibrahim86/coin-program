@@ -423,6 +423,39 @@ def oi_change(conn, coin_id: int, hours: int = 24):
         return now_oi / float(row[0]) - 1
 
 
+def oi_since(conn, coin_id: int, ts):
+    """Open interest-förändring sedan tidpunkten `ts` (andel), eller None.
+
+    Används av hälsokollen: stannade de nya pengarna kvar efter att du köpte,
+    eller läckte de ut igen? CHZ 27 aug är exemplet — OI toppade +5.8% vid
+    flaggan och var tillbaka på +0.7% ett dygn senare, och traden gick -6.7%.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT open_interest FROM derivatives
+            WHERE coin_id = %s AND open_interest > 0
+              AND ts BETWEEN %s - interval '3 hours' AND %s + interval '6 hours'
+            ORDER BY ts LIMIT 1
+            """,
+            (coin_id, ts, ts),
+        )
+        row = cur.fetchone()
+        if not row or float(row[0]) == 0:
+            return None
+        da = float(row[0])
+        cur.execute(
+            """
+            SELECT open_interest FROM derivatives
+            WHERE coin_id = %s AND open_interest > 0
+            ORDER BY ts DESC LIMIT 1
+            """,
+            (coin_id,),
+        )
+        row = cur.fetchone()
+        return float(row[0]) / da - 1 if row else None
+
+
 def aggregate_oi_change(conn, hours: int = 24):
     """Samlad OI-förändring över hela universumet — fångar likvidationskaskader."""
     with conn.cursor() as cur:

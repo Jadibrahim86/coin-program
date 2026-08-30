@@ -21,10 +21,22 @@ REPORT_HOUR = 17        # UTC (≈19 svensk tid)
 STATE_KEY = "last_weekly_report"
 
 
-def _bucket(oi):
-    if oi is None:
-        return "OI ?"
-    return "OI upp" if oi >= 0.02 else ("OI ner" if oi <= -0.02 else "OI neutral")
+def _bucket(meta):
+    """Grupperar på det som MÄTBART separerar utfall: trendstyrka och volym.
+
+    Grupperade tidigare på OI, men mätningen 2026-08-30 (n=93) visade att OI ger
+    0.2 procentenheters skillnad medan trendstyrka ger 5.1. Att fortsätta
+    redovisa OI-grupper hade fortsatt antyda att OI betyder något.
+    """
+    import re
+    import scout
+    meta = meta or {}
+    eff = re.search(r"eff (\d\.\d+)", meta.get("regime", "") or "")
+    b = scout.bucket_of(float(eff.group(1)) if eff else None, meta.get("vol_ratio"))
+    return {"stark/hog": "stark trend + hög volym",
+            "stark/lag": "stark trend + låg volym",
+            "svag/hog": "svag trend + hög volym",
+            "svag/lag": "svag trend + låg volym"}[b]
 
 
 def build(conn, days: int = LOOKBACK_DAYS) -> str:
@@ -51,7 +63,7 @@ def build(conn, days: int = LOOKBACK_DAYS) -> str:
         m = fwd(ids.get("BTC"), "BTC", ts, HORIZON_H) if ids.get("BTC") else None
         if r is None or m is None:
             continue
-        groups.setdefault((ft, _bucket((meta or {}).get("oi_chg"))), []).append(r - m)
+        groups.setdefault((ft, _bucket(meta)), []).append(r - m)
 
     L = [f"📊 <b>VECKORAPPORT</b> — senaste {days} dygnen",
          f"<i>Överavkastning mot BTC {HORIZON_H}h efter varje flagga. "
@@ -62,35 +74,37 @@ def build(conn, days: int = LOOKBACK_DAYS) -> str:
               "distribution": "🔴 Säljvolym <i>(loggas, skickas ej)</i>"}
     for ft, title in titles.items():
         lines = []
-        for b in ("OI upp", "OI neutral", "OI ner"):
+        for b in ("stark trend + hög volym", "stark trend + låg volym",
+                  "svag trend + hög volym", "svag trend + låg volym"):
             v = groups.get((ft, b))
             if not v:
                 continue
             avg = sum(v) / len(v) * 100
-            lines.append(f"  {b:<11} {avg:+5.1f}%  (n={len(v)})")
+            lines.append(f"  {b:<24}{avg:+5.1f}%  (n={len(v)})")
         if lines:
             L.append(f"\n<b>{title}</b>")
             L.extend(lines)
 
-    # 🟠 Tidigt vinstlarm: här är frågan inte "slog den BTC" utan "hade jag rätt i
-    # att varna". Mäts därför på ABSOLUT prisrörelse efter larmet — föll priset var
-    # det rätt att ta vinsten, steg det larmade vi för tidigt.
-    early = db.load_flag_outcomes(conn, days, flag_types=("early_profit",))
-    if early:
+    # 🔎 Hälsokollen: frågan är inte "slog den BTC" utan "hade jag rätt i att varna".
+    # Mäts på ABSOLUT prisrörelse efter larmet — föll priset var varningen befogad,
+    # steg det hade du tjänat på att sitta kvar. Det här avgör om den någonsin får
+    # bli ett säljlarm (i dag är den ren information, se exit_watch).
+    health = db.load_flag_outcomes(conn, days, flag_types=("health",))
+    if health:
         moves = []
-        for sym, cid, ft, ts, meta in early:
+        for sym, cid, ft, ts, meta in health:
             r = fwd(cid, sym, ts, HORIZON_H)
             if r is not None:
-                moves.append((sym, float(r), (meta or {}).get("pl")))
+                moves.append(float(r))
         if moves:
-            ratt = [m for m in moves if m[1] < 0]
-            L.append(f"\n<b>🟠 Tidigt vinstlarm</b> (nytt 2026-08-17)")
-            L.append(f"  {len(ratt)} av {len(moves)} gånger föll priset efter larmet "
-                     f"({HORIZON_H}h)")
-            snitt = sum(m[1] for m in moves) / len(moves) * 100
-            L.append(f"  snittrörelse efter larm: {snitt:+.1f}%")
-            L.append(f"  <i>Negativt snitt = larmet varnade i tid. Positivt = det "
-                     f"larmade för tidigt och du hade tjänat på att sitta kvar.</i>")
+            ratt = [m for m in moves if m < 0]
+            snitt = sum(moves) / len(moves) * 100
+            L.append(f"\n<b>🔎 Hälsokoll på innehav</b>")
+            L.append(f"  {len(ratt)} av {len(moves)} gånger föll priset efter varningen "
+                     f"({HORIZON_H}h) · snitt {snitt:+.1f}%")
+            L.append(f"  <i>Negativt snitt = varningen kom i tid. Positivt = du hade "
+                     f"tjänat på att sitta kvar. Vid mätningen 2026-08-30 var det ett "
+                     f"nollsummespel (+2,4 procentenheter på 32 trades).</i>")
 
     closed = db.load_closed_holdings(conn, days)
     if closed:

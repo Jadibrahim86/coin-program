@@ -87,7 +87,8 @@ står i koden; kortversionen:
 | 🟡 Faller + volym | `scout.py` | Nej — loggas för mätning |
 | 🔴 Säljvolym (radarn) | `scout.py` | Nej — loggas; dubblerade exit-vakten |
 | 💰 Funding-extremer | `scout.py` | **Borttaget** som eget utskick |
-| 🟠 Vinsten vänder | `exit_watch.py` | **Ja** — nytt |
+| 🔎 Hälsokoll på innehav | `exit_watch.py` | **Ja** — max 2×/dygn och coin |
+| 🟠 Vinsten vänder | `exit_watch.py` | **Borttaget** — se nedan |
 | ❌ Stop bruten · 📉 Trail · 🔴 Säljvolym på innehav | `exit_watch.py` | Ja |
 | 🌩️ Marknadslarm · 📊 Veckorapport | `stress.py` · `report.py` | Ja |
 
@@ -100,14 +101,26 @@ för ett eget utskick: en lista på coins med extrem funding gav inget för någ
 bara köper spot, och INJ låg kroniskt extrem. Märkt "ej mätt" — vi har ingen
 mätning som säger att funding förutsäger något.
 
-Det viktiga larmet är **🟠 "vinsten vänder"**. Det löser användarens största
-klagomål: han låg några procent plus, positionen vände, och det *enda* larmet kom
-vid stop-brottet på −7%. Orsaken var att `PROFIT_ARM = 1.06` aldrig nåddes
-(CHZ/ATOM/TAO toppade under +6%). Lösningen är **inte** att sänka `PROFIT_ARM` —
-det var den nivån som kapade vinnarna i juli — utan ett eget larm som kräver
-*bevis*: du ligger ≥ +2% **och** volymen är ≥ 4× snittet **och** momentum viker
-(volskalat). Volymkravet är det som skiljer det från juli-larmen, som gick på ren
-prisrörelse och tjöt på brus.
+## Lärdomen från 🟠 — läs den innan du bygger ett nytt larm
+
+🟠 "vinsten vänder" byggdes 2026-08-17 och togs bort 2026-08-30. Det utlöstes
+**noll gånger**, och en simulering mot alla 15 innehav visade att det aldrig
+hade kunnat utlösas. Felet var ett antagande som aldrig prövades mot data: jag
+krävde hög volym *samtidigt som* fallande momentum. I den här datan är de
+motsatt korrelerade — när priset viker på 6h ligger volymen typiskt **under**
+snittet (median 0.43×). Villkoren möttes 0 gånger av 1014 timmar i vinst.
+
+Mekaniken testades med sju mockade fall som alla gick igenom. Det som saknades
+var att köra villkoren mot **den verkliga historik larmet byggdes för**.
+
+> **Regel härefter:** innan ett nytt larm skeppas — simulera det mot `holdings`
+> och `ohlcv` och redovisa hur ofta det hade utlöst och vad det hade gett.
+> Ett larm som aldrig går är värre än inget larm, för det ser ut som ett skydd.
+
+Samma mätning underkände också själva premissen. 45 varianter av vinstskydd
+testades mot 25 trades och **ingen slog användarens egna exits** — den bästa
+förlorade 63 procentenheter, eftersom vinnarna (ZEC +60%, WLD +21%) dippade
+djupt innan de sprang. Sänk därför inte `PROFIT_ARM` och strama inte åt trailen.
 
 ## Universum
 
@@ -168,15 +181,29 @@ som säger när och mot vad den kalibrerades. Exempel:
 Om du ändrar en sådan konstant: säg vad den nya nivån bygger på, och uppdatera
 kommentaren. Att bara "skruva lite" raderar mätningen som ligger bakom.
 
-**Undantag som är ärligt märkt:** `EARLY_*` i `exit_watch.py` (🟠-larmet) är
-*inte* mätt mot utfall — de kommer ur användarens uttalade preferens ("jag tar
-gärna 3–5%") och ur hur CHZ/ATOM/TAO såg ut innan de vände. Veckorapporten mäter
-dem nu (`early_profit`-sektionen: föll priset efter larmet eller steg det?).
-Justera dem när det finns siffror, inte innan.
+**Mätning 2026-08-30 (n=93 flaggor) som styr konfluensen.** Bara två kriterier
+separerar utfall, och skillnaden mellan dem är stor:
 
-Mätt läge 2026-08-16 att ha i huvudet: 🟢-flaggan går **sämre än BTC** i alla tre
-OI-grupper (−0.5 till −1.5% på 48h, n=26), och OI separerar ingenting. Föreslå
-inte fler coins eller fler signaler som om ingången vore löst — det är den inte.
+| Kriterium | Uppfyllt | Ej uppfyllt | Skillnad |
+|---|---|---|---|
+| Trendstyrka eff ≥ 0.55 | +3.9% (74% plus) | −1.1% (34%) | **+5.1 pp** |
+| Volym ≥ 9× | +2.0% (58%) | +0.9% (50%) | +1.1 pp |
+| OI ≥ +2% | +1.6% | +1.4% | +0.2 pp |
+| OI ≥ +7% (gamla ✅✅) | +0.4% | +2.2% | **−1.8 pp** |
+| 5d positiv | uppfyllt i 92 av 93 | — | ingen urskiljning |
+
+Därför är stjärnorna nu **två**, inte fyra: OI och 5d var dekoration, och ✅✅
+pekade åt fel håll (den infördes på n=4). OI står kvar som förklarande text.
+`STRONG_TREND = 0.55`, `VOL_STRONG = 9.0`, `OI_STRONG` borttagen.
+
+Kombinerat: stark trend + hög volym gav **+4.3% och 82% positiva** (n=22); svag
+trend + låg volym gav **−2.2% och 25%** (n=20). `scout.flag_track_record()`
+räknar om detta varje körning och skriver ut det i utskicket, så texten
+korrigerar sig själv om mönstret ändras.
+
+`CHOP_MAX = 0.20` släpper fortfarande igenom flaggor i spannet 0.20–0.40 som i
+snitt förlorar 1.5%. De är numera märkta med sitt eget utfall i stället för att
+tystas — användaren ville behålla valmöjligheten.
 
 `radar_alerts.meta` loggar vad varje flagga byggde på (volym, OI, regim, pris)
 just för att kunna utvärdera i efterhand — `report.py` läser det. Lägg till

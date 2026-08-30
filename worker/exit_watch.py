@@ -46,19 +46,122 @@ MIN_PROFIT_NOW = 0.03   # ...och larmar bara om du ÄR i vinst just nu (≥ +3%)
 DIST_DEDUP_HOURS = 8    # säljvolym-larm per coin max var 8:e timme
 STOP_REMIND_HOURS = 20  # stop-larm upprepas ungefär en gång per dygn
 
-# --- Tidigt vinstlarm (🟠) ----------------------------------------------------
-# Trösklarna här är INTE mätta mot utfall — de är satta ur användarens uttalade
-# preferens ("jag tar gärna 3-5% på plussidan") och ur hur de tre senaste
-# förlusterna såg ut (CHZ/ATOM/TAO toppade mellan +2% och +5%). De ska mätas mot
-# radar_alerts-loggen om några veckor: larmade den för tidigt (priset gick vidare
-# upp) eller i tid (priset fortsatte ner)?
-EARLY_MIN_PROFIT = 0.02     # måste ligga minst +2% för att larmet ens övervägs
-EARLY_VOL = 4.0             # × snittvolym. Lägre än radarns 6× med flit: vi tittar
-                            # på 4 coins vi äger, inte letar nål i 34 — men högt nog
-                            # att det ska vara verklig säljvolym, inte drift.
-EARLY_TURN_MIN = 0.015      # momentum-vändning: max(1.5%, 0.5 × dagsvol) ner på 6h.
-EARLY_TURN_VOL_MULT = 0.5   # volskalat så ett 8%/dag-coin inte larmar på brus.
-EARLY_DEDUP_HOURS = 8
+# --- 🔎 Hälsokoll på öppna positioner ----------------------------------------
+# ERSÄTTER det tidiga vinstlarmet (🟠) som fanns här 17-30 aug 2026. Det larmet
+# utlöstes ALDRIG — inte en enda gång — och en simulering mot alla 15 innehav
+# visade att det aldrig hade kunnat utlösas heller. Felet var ett antagande:
+# jag krävde hög volym SAMTIDIGT som fallande momentum, men i den här datan är
+# de motsatt korrelerade. När priset viker på 6h ligger volymen typiskt UNDER
+# snittet (median 0.43×). Villkoren möttes 0 gånger av 1014 timmar i vinst.
+#
+# Den här kollar i stället om GRUNDEN för köpet finns kvar, flera gånger per
+# dygn så länge du äger coinet. Tre oberoende mått, alla mätta sedan DITT köp:
+#   1. Läckte de nya pengarna ut igen?  (open interest)
+#   2. Dog intresset?                   (volym mot baslinjen)
+#   3. Släpar coinet efter marknaden?   (mot BTC sedan köpet)
+#
+# Stöd i data: flaggor där OI fortsatte upp efter 24h gav +1.9% mot BTC (57%
+# positiva, n=40); där OI vände ner gav de +0.5% (48%, n=31). Separationen är
+# alltså ÄKTA MEN SVAG — därför formuleras det som "grunden har upphört att
+# gälla", inte som en säljorder. Loggas som 'position_health' för utvärdering.
+HEALTH_MIN_HOURS = 12       # ingen koll förrän positionen fått ett halvdygn på sig
+HEALTH_OI_LEAK = -0.02      # OI ned ≥2% sedan köpet = pengarna lämnade
+HEALTH_VOL_DEAD = 0.7       # senaste 12h volym < 70% av baslinjen = intresset dog
+HEALTH_LAG_BTC = -0.02      # ≥2 procentenheter sämre än BTC sedan köpet
+HEALTH_MIN_HITS = 2         # så många av de tre måste slå till
+HEALTH_DEDUP_HOURS = 12     # → som mest 2 gånger per dygn och coin
+#
+# VERIFIERAT MOT HISTORIK innan den byggdes (det steget hoppade jag över med 🟠):
+# på 32 avslutade trades / 200 innehavsdygn hade den utlöst för 24 av dem, ca 1
+# gång per innehav och dygn med 8h-dedup. MEN att sälja på första larmet hade
+# gett +2.4 procentenheter totalt — alltså ingen skillnad alls. Den räddade
+# förlorarna (OP +13.4, ATOM +7.8, CHZ +6.8) men kapade vinnarna (POL -22.7,
+# WLD -20.6, UNI -12.1). Därför är den formulerad som INFORMATION och siffran
+# står i utskicket. Om den någonsin ska bli ett säljlarm måste den siffran bli
+# tydligt positiv först.
+
+
+def _btc_return_since(conn, ts):
+    """BTC:s rörelse sedan `ts` — för att skilja coinets egen svaghet från marknadens."""
+    cid = db.load_coin_ids(conn).get("BTC")
+    if not cid:
+        return None
+    df = db.load_ohlcv_df(conn, cid, "1h")
+    if df.empty:
+        return None
+    i0 = df.index.get_indexer([ts], method="nearest")[0]
+    if abs((df.index[i0] - ts).total_seconds()) > 6 * 3600:
+        return None
+    return float(df["close"].iloc[-1] / df["close"].iloc[i0] - 1)
+
+
+def _health(conn, h: dict, df, i: int, close: float, pl_frac: float, pl: str):
+    """🔎 Håller grunden för köpet? Returnerar larmtext eller None.
+
+    Kollas varje timme men skickas som mest var HEALTH_DEDUP_HOURS:e timme, så
+    du får en uppdatering några gånger per dygn i stället för en engångskoll.
+    """
+    timmar = (datetime.now(timezone.utc) - h["opened_at"]).total_seconds() / 3600
+    if timmar < HEALTH_MIN_HOURS:
+        return None
+    if (h["coin_id"], "health") in db.recent_radar_alerts(conn, HEALTH_DEDUP_HOURS):
+        return None
+
+    rader, traffar = [], 0
+
+    oi = db.oi_since(conn, h["coin_id"], h["opened_at"])
+    if oi is None:
+        rader.append("  ➖ OI saknas för det här coinet")
+    elif oi <= HEALTH_OI_LEAK:
+        traffar += 1
+        rader.append(f"  ⚠️ <b>Pengarna lämnade:</b> OI {oi*100:+.1f}% sedan du köpte")
+    else:
+        rader.append(f"  ✅ Pengarna kvar: OI {oi*100:+.1f}% sedan köp")
+
+    volbas = df["volume"].rolling(48).mean().iloc[i]
+    volnu = float(df["volume"].iloc[max(0, i - 11):i + 1].mean())
+    kvot = volnu / float(volbas) if volbas else None
+    if kvot is None:
+        rader.append("  ➖ Volymen går inte att jämföra")
+    elif kvot < HEALTH_VOL_DEAD:
+        traffar += 1
+        rader.append(f"  ⚠️ <b>Intresset dog:</b> volymen {kvot:.1f}× av det normala")
+    else:
+        rader.append(f"  ✅ Volym kvar: {kvot:.1f}× av det normala")
+
+    btc = _btc_return_since(conn, h["opened_at"])
+    if btc is None:
+        rader.append("  ➖ Kan inte jämföra mot BTC")
+    else:
+        rel = pl_frac - btc
+        if rel <= HEALTH_LAG_BTC:
+            traffar += 1
+            rader.append(f"  ⚠️ <b>Släpar efter marknaden:</b> {rel*100:+.1f}% mot BTC sedan köp")
+        else:
+            rader.append(f"  ✅ Håller jämna steg: {rel*100:+.1f}% mot BTC sedan köp")
+
+    if traffar < HEALTH_MIN_HITS:
+        return None
+
+    kr = ""
+    if h.get("amount"):
+        kr = f" ({h['amount'] * pl_frac:+,.0f} kr)".replace(",", " ")
+    db.record_radar_alerts(conn, [(h["coin_id"], "health", {
+        "pl": round(pl_frac, 4), "oi_since": None if oi is None else round(oi, 4),
+        "vol_kvot": None if kvot is None else round(kvot, 2),
+        "vs_btc": None if btc is None else round(pl_frac - btc, 4),
+        "traffar": traffar, "timmar": round(timmar), "price": close,
+    })])
+    return (
+        f"🔎 <b>{h['symbol']}: grunden för köpet håller inte längre</b>\n"
+        f"  Du ligger {pl}{kr} · håller sedan {timmar/24:.0f} d\n"
+        + "\n".join(rader) + "\n"
+        f"  <i>Inget säljråd — grunden för köpet finns bara inte kvar längre.\n"
+        f"  Ärligt om vad det är värt: på dina 32 senaste trades hade det gett "
+        f"+2,4 procentenheter totalt att sälja på ett sånt här larm. Alltså ingen "
+        f"skillnad. Det räddade förlorarna men kapade POL (+35%) och WLD (+21%) "
+        f"i förtid. Läs det som 'kolla varför du äger den här', inte 'sälj'.</i>"
+    )
 
 
 def _check_holding(conn, h: dict, timeframe: str) -> list:
@@ -108,32 +211,11 @@ def _check_holding(conn, h: dict, timeframe: str) -> list:
 
     snap = scout._snapshot(conn, SimpleNamespace(symbol=h["symbol"]), h["coin_id"], timeframe)
 
-    # 🟠 TIDIGT VINSTLARM — du ligger plus och säljvolym kliver in. Se docstringen:
-    # det här är larmet som saknades när CHZ/ATOM/TAO toppade under +6% och gick
-    # hela vägen till stoppen utan ett ord. Hoppas över om stop/trail redan larmat.
-    if snap and not msgs and pl_frac >= EARLY_MIN_PROFIT:
-        turn = -max(EARLY_TURN_MIN, EARLY_TURN_VOL_MULT * vol) if vol else -EARLY_TURN_MIN
-        if snap["vol_ratio"] >= EARLY_VOL and snap["mom_short"] <= turn:
-            if (h["coin_id"], "early_profit") not in db.recent_radar_alerts(conn, EARLY_DEDUP_HOURS):
-                kr = ""
-                if h.get("amount"):
-                    gain = h["amount"] * pl_frac
-                    kr = f" ({gain:+,.0f} kr)".replace(",", " ")
-                _, oitxt = scout.oi_label("distribution", snap["oi_chg"])
-                msgs.append(
-                    f"🟠 <b>{h['symbol']}: vinsten vänder</b>\n"
-                    f"  du ligger {pl}{kr} · säljvolym {snap['vol_ratio']:.1f}× snittet, "
-                    f"6h {snap['mom_short']*100:+.1f}%\n"
-                    f"  {oitxt}\n"
-                    f"  <i>Överväg att ta vinsten här. Det kan mycket väl gå vidare upp — "
-                    f"men de senaste förlusterna såg ut precis så här strax innan de vände "
-                    f"ner genom ingången och vidare till stoppen.</i>"
-                )
-                db.record_radar_alerts(conn, [(h["coin_id"], "early_profit", {
-                    "pl": round(pl_frac, 4), "vol_ratio": round(snap["vol_ratio"], 1),
-                    "mom_short": round(snap["mom_short"], 4), "oi_chg": snap["oi_chg"],
-                    "price": close,
-                })])
+    # 🔎 HÄLSOKOLL — finns grunden för köpet kvar? Se konstant-blocket ovan.
+    if not msgs:
+        hm = _health(conn, h, df, i, close, pl_frac, pl)
+        if hm:
+            msgs.append(hm)
 
     # 🔴 SÄLJVOLYM i ett coin du äger (scout-mönstret, med egen dedup)
     if snap and not msgs and scout.classify(snap) == "distribution":

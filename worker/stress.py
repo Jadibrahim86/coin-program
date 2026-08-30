@@ -78,6 +78,24 @@ def measure(panel: pd.DataFrame, agg_oi_chg=None) -> dict:
     return out
 
 
+def effective_positions(n: int, korr) -> float | None:
+    """Hur många OBEROENDE innehav dina n positioner egentligen motsvarar.
+
+    n / (1 + (n-1)·korrelation) — standardmåttet för effektiv diversifiering.
+    Med 6 positioner: korrelation 0.26 (vanlig dag) ger 2.6 oberoende innehav,
+    0.68 (23 aug 2026) ger 1.4. Samma pengar, helt olika risk.
+
+    Poängen är att säga något KONKRET utan att låtsas veta riktningen — mätningen
+    2026-08-30 visade att stresslarmet inte förutsäger upp eller ner alls
+    (snitt -0.07% på 24h, 6 av 11 negativa). Det det däremot vet är att
+    positionerna inte längre är oberoende, och det är en storleksfråga.
+    """
+    if n <= 0 or korr is None:
+        return None
+    d = 1 + (n - 1) * max(0.0, min(1.0, korr))
+    return n / d if d > 0 else None
+
+
 def run(conn, send: bool = True) -> int:
     panel = load_panel(conn)
     m = measure(panel, db.aggregate_oi_change(conn, 24))
@@ -98,6 +116,12 @@ def run(conn, send: bool = True) -> int:
 
     holdings = db.load_open_holdings(conn)
     if holdings:
+        n_eff = effective_positions(len(holdings), m["corr"])
+        if n_eff is not None:
+            L.append(f"\n⚖️ <b>Dina {len(holdings)} positioner beter sig som "
+                     f"{n_eff:.1f} oberoende innehav</b> just nu.")
+            L.append("<i>Samma pengar, men risken klumpar ihop sig — som om du satsat "
+                     f"allt på {n_eff:.1f} coin i stället för {len(holdings)}.</i>")
         L.append("\n<b>Dina innehav:</b>")
         for h in holdings:
             price = db.get_last_close(conn, h["coin_id"])

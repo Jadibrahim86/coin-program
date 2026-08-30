@@ -69,8 +69,21 @@ MARKET_DOWN = -0.02         # BTC 24h under detta = risk-off → inga 🟢
 # EJ VALIDERAD som edge än — visas som markering, mäts på kommande trades.
 OI_WINDOW_H = 24
 OI_THRESHOLD = 0.02
-OI_STRONG = 0.07            # ✅✅ — mätning antyder att STORLEKEN betyder mer än tecknet
-VOL_STRONG = 8.0            # volymspik som räknas som "stark" i konfluensbetyget
+# OI_STRONG (✅✅ vid ≥7%) ÄR BORTTAGET 2026-08-30. Det infördes på n=4 med
+# antagandet att storleken betyder mer än tecknet. Med n=35 gick det åt andra
+# hållet: flaggor med OI ≥ +7% gav +0.4% mot +2.2% för övriga — alltså 1.8
+# procentenheter SÄMRE. En markering som pekar fel är värre än ingen markering.
+VOL_STRONG = 9.0            # höjd 8→9 2026-08-30: ≥9× gav +2.0% mot +0.9% under (n=93)
+
+# --- Mätt trendstyrka (den starkaste enskilda faktorn vi hittat) --------------
+# eff ≥ 0.55 gav +3.9% mot BTC och 74% positiva; under det -1.1% och 34%.
+# Skillnaden (5.1 procentenheter) är större än alla andra kriterier tillsammans.
+STRONG_TREND = 0.55
+
+# --- Flaggans egen träffhistorik (visas i utskicket) -------------------------
+TRACK_DAYS = 45             # hur långt bak vi räknar
+TRACK_HORIZON_H = 48        # samma horisont som veckorapporten
+TRACK_MIN_N = 8             # under detta skriver vi inget — för tunt att uttala sig om
 
 BARS_PER_DAY = {"5m": 288, "15m": 96, "1h": 24, "4h": 6, "1d": 1}
 
@@ -102,24 +115,116 @@ def _snapshot(conn, coin, cid: int, tf: str):
     }
 
 
-def confluence(s: dict, regime: dict) -> tuple:
-    """(stjärnor, rader) — hur många av de fyra sakerna drar åt samma håll?
+def bucket_of(eff, vol_ratio) -> str:
+    """Vilken av de fyra mätta grupperna en flagga tillhör.
 
-    De fyra är valda för att de skilde vinnare från förlorare i verklig data:
-    UNI (+11.9%) var 4/4, BCH (-6.4%) var 2/4 trots att båda hade OI-stöd.
+    Grupperna kommer ur mätningen 2026-08-30 (n=93 flaggor, 45 dygn), där
+    trendstyrka och volym var de ENDA två kriterier som separerade utfallet:
+
+        stark trend + hög volym   +4.3%  82% positiva  (n=22)
+        stark trend + låg volym   +3.6%  67%           (n=24)
+        svag trend  + hög volym   -0.5%  33%           (n=18)
+        svag trend  + låg volym   -2.2%  25%           (n=20)
+
+    Siffrorna hårdkodas inte — flag_track_record() räknar om dem varje körning
+    ur radar_alerts, så texten korrigerar sig själv om mönstret ändras.
     """
-    oi = s.get("oi_chg")
-    _, oi_txt = oi_label("turning_up", oi)   # samma förklaring som i /buy och 🟡/🔴
+    stark = eff is not None and eff >= STRONG_TREND
+    hog = vol_ratio is not None and vol_ratio >= VOL_STRONG
+    return f"{'stark' if stark else 'svag'}/{'hog' if hog else 'lag'}"
+
+
+def flag_track_record(conn, days: int = TRACK_DAYS) -> dict:
+    """{grupp: (snitt_överavkastning, andel_positiva, n)} ur egna loggade flaggor.
+
+    Bara flaggor äldre än horisonten tas med, så fönstret hunnit stängas —
+    annars mäter vi på halva utfall och lurar oss själva.
+    """
+    import re
+    from datetime import timedelta
+    rows = db.load_flag_outcomes(conn, days, flag_types=("turning_up",))
+    ids = db.load_coin_ids(conn)
+    btc_id = ids.get("BTC")
+    if not btc_id:
+        return {}
+    cache, grupper = {}, {}
+    grans = datetime.now(timezone.utc) - timedelta(hours=TRACK_HORIZON_H + 2)
+
+    def ret(cid, sym, t0):
+        if sym not in cache:
+            cache[sym] = db.load_ohlcv_df(conn, cid, "1h")
+        df = cache[sym]
+        if df.empty:
+            return None
+        t1 = t0 + timedelta(hours=TRACK_HORIZON_H)
+        i0 = df.index.get_indexer([t0], method="nearest")[0]
+        i1 = df.index.get_indexer([t1], method="nearest")[0]
+        if abs((df.index[i1] - t1).total_seconds()) > 3 * 3600:
+            return None
+        return float(df["close"].iloc[i1] / df["close"].iloc[i0] - 1)
+
+    for sym, cid, ft, ts, meta in rows:
+        if ts > grans:
+            continue
+        r, m = ret(cid, sym, ts), ret(btc_id, "BTC", ts)
+        if r is None or m is None:
+            continue
+        meta = meta or {}
+        eff = re.search(r"eff (\d\.\d+)", meta.get("regime", "") or "")
+        grupper.setdefault(
+            bucket_of(float(eff.group(1)) if eff else None, meta.get("vol_ratio")), []
+        ).append(r - m)
+
+    return {k: (sum(v) / len(v), sum(1 for x in v if x > 0) / len(v), len(v))
+            for k, v in grupper.items()}
+
+
+def track_line(track: dict, eff, vol_ratio) -> str | None:
+    """Raden som säger hur just den här sortens flagga faktiskt har gått."""
+    st = track.get(bucket_of(eff, vol_ratio))
+    if not st or st[2] < TRACK_MIN_N:
+        return None
+    snitt, andel, n = st
+    dom = "✅" if snitt > 0.01 else ("⚠️" if snitt < -0.005 else "➖")
+    return (f"      {dom} <b>Såna här flaggor hittills:</b> {snitt*100:+.1f}% mot BTC "
+            f"på {TRACK_HORIZON_H}h, {andel*100:.0f}% positiva (n={n})")
+
+
+def confluence(s: dict, regime: dict, track: dict, visade: set | None = None) -> tuple:
+    """(stjärnor, antal, rader) — bara de kriterier som MÄTBART separerar utfall.
+
+    Var fyra stjärnor till 2026-08-30. Mätningen (n=93) visade att två av dem
+    var dekoration: OI som ja/nej gav 0.2 procentenheters skillnad, och "5d
+    positiv" var uppfyllt i 92 av 93 flaggor — ett kriterium som alltid är sant
+    skiljer ingenting. Båda är borta som stjärnor. OI står kvar som text
+    eftersom det förklarar VAD som händer, men det får inte längre låtsas
+    förutsäga något.
+    """
+    eff = regime.get("eff")
+    stark = eff is not None and eff >= STRONG_TREND
     checks = [
+        (stark,
+         f"Marknad: stark trend (eff {eff:.2f})" if stark
+         else (f"Marknad: eff {eff:.2f} — under {STRONG_TREND} där flaggan mätbart "
+               f"fungerar" if eff is not None else "Marknad: okänd")),
         (s["vol_ratio"] >= VOL_STRONG,
-         f"Volym {s['vol_ratio']:.1f}× snittet" + ("" if s["vol_ratio"] >= VOL_STRONG else " (måttlig)")),
-        (oi is not None and oi >= OI_THRESHOLD, oi_txt),
-        (s["mom5"] > 0, f"5d {s['mom5']*100:+.0f}%" + (" — redan i uppåttrend" if s["mom5"] > 0 else " — faller ännu")),
-        (regime.get("allow_long", False), f"Marknad: {regime.get('label','?')}"),
+         f"Volym {s['vol_ratio']:.1f}× snittet"
+         + ("" if s["vol_ratio"] >= VOL_STRONG else f" — under {VOL_STRONG:.0f}×")),
     ]
     n = sum(1 for ok, _ in checks if ok)
-    stars = "⭐" * n + "☆" * (4 - n)
+    stars = "⭐" * n + "☆" * (len(checks) - n)
     rows = [f"      {'✅' if ok else '❌'} {txt}" for ok, txt in checks]
+    _, oi_txt = oi_label("turning_up", s.get("oi_chg"))
+    rows.append(f"      ➖ {oi_txt} <i>(förklarar, förutsäger inte)</i>")
+    # Historikraden är samma för alla coins i samma grupp — skriv den en gång
+    # per utskick i stället för att upprepa identisk text sex gånger.
+    grupp = bucket_of(eff, s["vol_ratio"])
+    if visade is None or grupp not in visade:
+        tl = track_line(track, eff, s["vol_ratio"])
+        if tl:
+            rows.append(tl)
+            if visade is not None:
+                visade.add(grupp)
     return stars, n, rows
 
 
@@ -137,8 +242,6 @@ def oi_label(kind: str, oi) -> tuple:
     else:
         pct = f"{oi*100:+.0f}%"
     if kind == "turning_up":
-        if oi >= OI_STRONG:
-            return "✅✅", f"OI {pct} — nya pengar in (starkt)"
         if oi >= OI_THRESHOLD:
             return "✅", f"OI {pct} — nya pengar in"
         if oi <= -OI_THRESHOLD:
@@ -189,6 +292,39 @@ def market_regime(conn, coin_ids: dict) -> dict:
     if eff is not None and eff < CHOP_MAX:
         return {"label": f"hackig/chop (eff {eff:.2f})", "allow_long": False, "eff": eff, "chg": chg}
     return {"label": f"trendande (eff {eff:.2f}, {REGIME_REF} {chg*100:+.1f}%)", "allow_long": True, "eff": eff, "chg": chg}
+
+
+# --- Marknadsläge: spelar coinvalet roll just nu? ----------------------------
+# Två oberoende saker, båda kalibrerade på 54 dygns egen historik:
+#   korrelation  — hur mycket coinsen rör sig ihop (median 0.26, p75 0.39, p90 0.59)
+#   tvärsnittsvol — hur stora skillnaderna är samma timme (median 0.56%)
+# Hög korrelation = alla gör samma sak, då är det bara insatsens STORLEK som är
+# ett beslut. Låg korrelation + stor spridning = coinvalet avgör faktiskt utfallet.
+# EJ MÄTT mot utfall — det här beskriver läget, det förutsäger inte riktning.
+MODE_CORR_HIGH = 0.50
+MODE_CORR_LOW = 0.30
+MODE_XVOL_HIGH = 0.0056     # medianen
+
+
+def market_mode(conn) -> str | None:
+    """En rad överst som säger vilken sorts marknad du fattar beslut i."""
+    import stress
+    panel = stress.load_panel(conn, hours=120)
+    if panel.empty or len(panel) < stress.CORR_WINDOW + 6:
+        return None
+    r = panel.pct_change().dropna()
+    c = r.tail(stress.CORR_WINDOW).corr().values
+    iu = np.triu_indices_from(c, k=1)
+    korr = float(np.nanmean(c[iu]))
+    xvol = float(r.tail(6).std(axis=1).mean())
+
+    if korr >= MODE_CORR_HIGH:
+        return (f"🔗 <b>Allt rör sig ihop</b> (korrelation {korr:.2f}) — coinvalet "
+                f"spelar mindre roll nu, det är insatsens storlek som är beslutet.")
+    if korr <= MODE_CORR_LOW and xvol >= MODE_XVOL_HIGH:
+        return (f"🎯 <b>Coinvalet spelar roll</b> (korrelation {korr:.2f}, spridning "
+                f"{xvol*100:.2f}%) — coinen rör sig på egna meriter just nu.")
+    return f"<i>Korrelation {korr:.2f} · spridning {xvol*100:.2f}% (normalläge)</i>"
 
 
 def _funding_map(conn) -> dict:
@@ -267,12 +403,17 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
         return
 
     funding = _funding_map(conn)
+    track = flag_track_record(conn)
 
     L = [f"📡 <b>VOLYM-RADAR</b> ({timeframe}, bevakning – ej råd) — {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC",
          f"<i>Marknad: {regime['label']}</i>"]
+    mode = market_mode(conn)
+    if mode:
+        L.append(mode)
     if suppressed:
         L.append(f"<i>({suppressed} köp-flagga(or) tystad — köpsignaler har historiskt "
                  f"failat i det här marknadsläget)</i>")
+    visade_grupper: set = set()
     for k in SEND_SECTIONS:
         if k not in sent:
             continue
@@ -282,9 +423,8 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
             rs = s.get("rs_btc")
             rs_txt = f" · vs BTC {rs*100:+.0f}%" if rs is not None else ""
             if k == "turning_up":
-                stars, n, rows = confluence(s, regime)
-                late = "  ⚠️ sent i rörelsen" if s["mom24"] > LATE_24H else ""
-                L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/4{late}")
+                stars, n, rows = confluence(s, regime, track, visade_grupper)
+                L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/2")
                 L.extend(rows)
                 L.append(f"      24h {s['mom24']*100:+.0f}%{rs_txt}")
                 fl = funding_line(funding.get(s["sym"]))
@@ -298,10 +438,11 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
                          f"      {oitxt}")
         L.append(f"  <i>↳ {note}</i>")
         if k == "turning_up":
-            L.append("  <i>↳ ⭐ = hur många av volym / OI / 5d-trend / marknadsläge som drar "
-                     "åt samma håll. 4/4 är det starkaste läget vi kan visa — inte en köporder. "
-                     "Mätt hittills: flaggan går i snitt SÄMRE än BTC, så läs den som "
-                     "'titta här', inte 'köp här'.</i>")
+            L.append("  <i>↳ ⭐ = de två kriterier som MÄTBART skiljer utfall: trendstyrka "
+                     "i marknaden och volym. Var fyra tidigare, men OI och 5d-trend "
+                     "separerade ingenting (n=93) och togs bort — fyra kryss varav två "
+                     "var dekoration gjorde betyget missvisande. Raden om tidigare utfall "
+                     "räknas om varje körning ur systemets egna flaggor.</i>")
     if owned:
         L.append(f"\n<i>({', '.join(owned)} flaggades också men du äger dem redan — "
                  f"de bevakas av exit-vakten.)</i>")
