@@ -120,6 +120,55 @@ def _snapshot(conn, coin, cid: int, tf: str):
     }
 
 
+def sort_key(s: dict) -> tuple:
+    """Ordning i utskicket: bäst först. Volym sist eftersom den är svagast.
+
+    Sorterades tidigare bara på volym, vilket är det minst betydelsefulla av de
+    mätta kriterierna (+1.1 procentenheter mot trendstyrkans +5.1). Den 3 sep
+    hamnade LINK först och AVAX tredje, fastän AVAX var det enda coinet som
+    uppfyllde allt. Det översta coinet är det som läses.
+
+    Relativ styrka är tiebreaker, inte betyg: coins som SLÄPADE efter BTC vid
+    flaggan har gett +4.4% mot BTC efteråt (69% positiva, n=39), de som ledde
+    -0.4% till -1.0% (n=61). Det ska utvärderas 13 sep innan det får bli en
+    stjärna — sortering ändrar bara ordningen, inte betyget eller loggningen,
+    så mätserien påverkas inte.
+
+    Ordningen är: (1) uppfyllt volymkriteriet, (2) släpar efter BTC, (3) volym.
+    Trendstyrkan är samma för alla coins i ett utskick, så betygsskillnader
+    kommer bara från volymen — därför räcker den som första nyckel. Betyget
+    måste dominera över ett kriterium som ännu inte är poängsatt.
+
+    Steg 2 är BINÄRT på tecknet, inte på råvärdet. Mätningen är en uppdelning
+    vid noll (släpar +4.4% mot ledande -0.4 till -1.0%) utan glidande skala
+    inom grupperna. Att sortera på råtalet hade låtsats om precision vi inte har.
+    """
+    rs = s.get("rs_btc")
+    return (0 if s["vol_ratio"] >= VOL_STRONG else 1,   # betyget först
+            0 if (rs is not None and rs < 0) else 1,    # sedan: släpar före leder
+            -s["vol_ratio"])                            # sist: starkast volym
+
+
+def rs_line(s: dict) -> str:
+    """24h-raden med BTC:s egen rörelse utskriven.
+
+    Stod tidigare som "24h +6% · vs BTC +1%", vilket kräver huvudräkning för att
+    ens se om BTC gått upp eller ner — och sa ingenting om att det är SLÄPANDE
+    coins som historiskt gått bäst. BTC-talet härleds ur samma tal som
+    differensen (mom24 - rs), så raden alltid går ihop aritmetiskt.
+    """
+    mom, rs = s["mom24"], s.get("rs_btc")
+    if rs is None:
+        return f"      24h {mom*100:+.0f}%"
+
+    def pct(v):
+        return f"{abs(v)*100:.1f}%" if abs(v) < 0.01 else f"{abs(v)*100:.0f}%"
+
+    dom = (f"släpar {pct(rs)} efter marknaden" if rs < 0
+           else f"leder marknaden {pct(rs)}" if rs > 0 else "i linje med marknaden")
+    return f"      24h {mom*100:+.0f}% · BTC {(mom-rs)*100:+.0f}% · {dom}"
+
+
 def bucket_of(eff, vol_ratio) -> str:
     """Vilken av de fyra mätta grupperna en flagga tillhör.
 
@@ -403,7 +452,7 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
     recent = db.recent_radar_alerts(conn, DEDUP_HOURS)
     for k in buckets:
         buckets[k] = sorted((s for s in buckets[k] if (s["cid"], k) not in recent),
-                            key=lambda s: -s["vol_ratio"])
+                            key=sort_key)
 
     sent = {k: v for k, v in buckets.items() if k in SEND_SECTIONS and v}
     if not sent:
@@ -438,7 +487,7 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
                 stars, n, rows = confluence(s, regime, track, visade_grupper)
                 L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/2")
                 L.extend(rows)
-                L.append(f"      24h {s['mom24']*100:+.0f}%{rs_txt}")
+                L.append(rs_line(s))
                 fl = funding_line(funding.get(s["sym"]))
                 if fl:
                     L.append(fl)
@@ -456,6 +505,13 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
             L.append("  <i>↳ ⭐ = de två kriterier som mätbart skiljer utfall: "
                      "trendstyrka och volym. ⚠️-raden är flaggtypens egen historik, "
                      "omräknad varje körning.</i>")
+            # Tolkningen är kontraintuitiv nog att behöva stå utskriven: att
+            # SLÄPA är det gynnsamma läget. Ingen gissar det av sig själv.
+            if any(s.get("rs_btc") is not None for s in sent[k][:6]):
+                L.append("  <i>↳ Listan är sorterad med de coins som släpar efter "
+                         "marknaden först. Mätt: de har gett +4.4% mot BTC efteråt "
+                         "(69% positiva, n=39), de som redan leder −0.4 till −1.0%. "
+                         "Ingår inte i betyget än — utvärderas 13 sep.</i>")
     if owned:
         L.append(f"\n<i>({', '.join(owned)} flaggades också men du äger dem redan — "
                  f"de bevakas av exit-vakten.)</i>")

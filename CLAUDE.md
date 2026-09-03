@@ -205,6 +205,34 @@ korrigerar sig själv om mönstret ändras.
 snitt förlorar 1.5%. De är numera märkta med sitt eget utfall i stället för att
 tystas — användaren ville behålla valmöjligheten.
 
+### Mätning 2026-09-03 (n=100) — kandidat till ett tredje kriterium
+
+**Relativ styrka vid flaggan är den starkaste okvitterade faktorn**, och riktningen
+är kontraintuitiv: coins som **släpade efter** BTC gick bäst.
+
+| Vid flaggan | Utfall 48h | Andel plus | n |
+|---|---|---|---|
+| Släpade efter BTC (<0%) | **+4.4%** | 69% | 39 |
+| Slog BTC något (0 till +3%) | −0.4% | 40% | 30 |
+| Slog BTC klart (>+3%) | −1.0% | 48% | 31 |
+
+Som betyg skulle det ge: 2 kriterier → 2/2 ger +4.3% (82%, n=22); **3 kriterier →
+3/3 ger +6.7% (87%, n=15)**; 4 (även "tidigt i rörelsen") → 4/4 ger +9.8% (100%,
+n=8, för tunt). Tre är nivån. "Tidigt" korrelerar 0.67 med relativ styrka, så det
+är mest dubbelräkning — släpandet bär signalen.
+
+**Status:** används sedan 2026-09-03 bara som **sorteringsnyckel** i `sort_key()`
+plus en förklarande rad, inte som stjärna. Sortering ändrar inte betyget, inte
+vilka flaggor som går ut och inte vad som loggas, så utvärderingsfönstret
+störs inte. **Beslut om att göra det till ett tredje kriterium tas 13 sep.**
+
+**OI underkändes en tredje gång.** Testat villkorat inom stark trend, där andra
+faktorer visat sig framträda: OI ≥ +7% gav +1.3% (n=20), +2–7% gav +5.9% (n=12),
+under +2% gav **+6.0%** (n=14). Inverterat igen. Föreslå inte en OI-stjärna —
+den har nu fallit på n=4 (som ✅✅), på n=93 (okvalificerat) och på n=46
+(villkorat). OI-raden står kvar som förklarande text; användaren ville behålla
+den och utvärderar den 13 sep.
+
 `radar_alerts.meta` loggar vad varje flagga byggde på (volym, OI, regim, pris)
 just för att kunna utvärdera i efterhand — `report.py` läser det. Lägg till
 meta-fält när du lägger till en signal, annars går den inte att utvärdera sen.
