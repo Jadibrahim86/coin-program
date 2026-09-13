@@ -88,6 +88,7 @@ står i koden; kortversionen:
 | 🔴 Säljvolym (radarn) | `scout.py` | Nej — loggas; dubblerade exit-vakten |
 | 💰 Funding-extremer | `scout.py` | **Borttaget** som eget utskick |
 | 🔎 Hälsokoll på innehav | `exit_watch.py` | **Ja** — max 2×/dygn och coin |
+| 📉 Vinsten rinner tillbaka | `exit_watch.py` | **Ja** — del av hälsokollen, räcker ensamt |
 | 🟠 Vinsten vänder | `exit_watch.py` | **Borttaget** — se nedan |
 | ❌ Stop bruten · 📉 Trail · 🔴 Säljvolym på innehav | `exit_watch.py` | Ja |
 | 🌩️ Marknadslarm · 📊 Veckorapport | `stress.py` · `report.py` | Ja |
@@ -117,10 +118,46 @@ var att köra villkoren mot **den verkliga historik larmet byggdes för**.
 > och `ohlcv` och redovisa hur ofta det hade utlöst och vad det hade gett.
 > Ett larm som aldrig går är värre än inget larm, för det ser ut som ett skydd.
 
+**Samma fel hände igen 2026-09-13, trots regeln.** Hälsokollens volym-villkor
+kunde aldrig bli sant: koden hade `df["volume"].iloc[max(0, i-11):i+1]` där `i`
+kommer från `_last_closed_idx()` och är **negativt** (−1 eller −2). För negativa
+`i` kollapsar `max(0, i-11)` till 0, så slicen blev `iloc[0:-1]` — hela
+historiken (2827 barer) i stället för de senaste tolv. Kvoten blev 4.85 där den
+skulle vara 0.85.
+
+Verifieringsskriptet missade det eftersom det **skrev om logiken** med positiva
+index från `get_loc()`. Det testade alltså en annan kodväg än den som skeppades.
+
+> **Skärpning av regeln:** simuleringen måste **anropa den riktiga funktionen**,
+> matad med data avkortad till tidpunkten, så index och kodväg blir identiska med
+> skarpt läge. Skriv aldrig om villkoren i testskriptet.
+
 Samma mätning underkände också själva premissen. 45 varianter av vinstskydd
 testades mot 25 trades och **ingen slog användarens egna exits** — den bästa
 förlorade 63 procentenheter, eftersom vinnarna (ZEC +60%, WLD +21%) dippade
 djupt innan de sprang. Sänk därför inte `PROFIT_ARM` och strama inte åt trailen.
+
+### Varför trailen aldrig utlöser på volatila coins
+
+ETHFI 10–13 sep: toppade **+11.0%**, föll 16.5 procentenheter till −7.3%, och
+inget larm gick. Orsakerna, som är strukturella och värda att förstå:
+
+- **Stoppen** låg på −15% (2.4 × dagsvol 8%) — nio procentenheter bort ännu.
+- **Trailen** kräver band = 1.5 × dagsvol = **12%** *och* att du är +3% just då.
+  På ett 8%/dag-coin hinner vinsten sällan bli större än bandet, så när priset
+  fallit 12% från toppen är du redan under +3%. Trailen är i praktiken utesluten
+  på såna coins — inte trasig, bara omöjlig att nå.
+- **Hälsokollen** hade OI som steg hela tiden (+13% vid slutet), så "pengarna
+  lämnade" var falskt, och volym-villkoret var trasigt (buggen ovan).
+
+Därför finns `PEAK_*` i `exit_watch.py`: ett eget villkor som bara tittar på din
+egen topp och din egen vinst, med band = max(4%, **1.0** × dagsvol) mot trailens
+1.5. Det **räcker ensamt** — de andra tre kräver två av tre. På ETHFI hade det
+larmat 12 sep 23:00 medan positionen fortfarande låg **+2.0%**, med texten
+"toppade +11.0%, du har tappat 9.0 procentenheter därifrån".
+
+Verifierat mot 31 innehav / 158 innehavsdygn: 0.85 larm per coin och dygn, och
+första larmet gav bättre pris än användarens faktiska exit i 15 fall mot 10.
 
 ## Universum
 

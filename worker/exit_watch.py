@@ -68,7 +68,26 @@ HEALTH_MIN_HOURS = 12       # ingen koll förrän positionen fått ett halvdygn 
 HEALTH_OI_LEAK = -0.02      # OI ned ≥2% sedan köpet = pengarna lämnade
 HEALTH_VOL_DEAD = 0.7       # senaste 12h volym < 70% av baslinjen = intresset dog
 HEALTH_LAG_BTC = -0.02      # ≥2 procentenheter sämre än BTC sedan köpet
-HEALTH_MIN_HITS = 2         # så många av de tre måste slå till
+HEALTH_MIN_HITS = 2         # så många av de tre ovan måste slå till
+
+# --- Vinsten rinner tillbaka (eget larm, räcker ensamt) ----------------------
+# ETHFI 10-13 sep är fallet som motiverar den: toppade +11.0%, föll 16.5
+# procentenheter till -7.3%, och INGET larm gick. Varför inget av de befintliga
+# räckte:
+#   stop        ligger på -15% (2.4 × dagsvol 8%) — 9 procentenheter bort ännu
+#   trail       kräver band = 1.5 × dagsvol = 12% OCH att du är +3% just då.
+#               På ett 8%/dag-coin är bandet bredare än vinsten hinner bli, så
+#               när priset fallit 12% från toppen är du redan under +3%. Trailen
+#               kan i praktiken aldrig utlösa på såna coins.
+#   hälsokoll   OI steg hela tiden (+13% vid slutet), så "pengarna lämnade" var
+#               falskt; volym-villkoret var trasigt (se buggen ovan).
+#
+# Den här tittar bara på DIN vinst och DIN topp. Bandet är 1.0 × dagsvolatilitet
+# (mot trailens 1.5) med 4% golv — på ETHFI hade det larmat 13 sep 00:00 medan
+# positionen fortfarande låg +2.1%, i stället för tystnad hela vägen till -7.3%.
+PEAK_ARM = 1.05             # toppen måste ha varit minst +5% över ditt köp
+PEAK_DROP_MIN = 0.04        # band = max(4%, 1.0 × dagsvol)
+PEAK_DROP_VOL_MULT = 1.0
 HEALTH_DEDUP_HOURS = 12     # → som mest 2 gånger per dygn och coin
 #
 # VERIFIERAT MOT HISTORIK innan den byggdes (det steget hoppade jag över med 🟠):
@@ -118,8 +137,14 @@ def _health(conn, h: dict, df, i: int, close: float, pl_frac: float, pl: str):
     else:
         rader.append(f"  ✅ Pengarna kvar: OI {oi*100:+.1f}% sedan köp")
 
-    volbas = df["volume"].rolling(48).mean().iloc[i]
-    volnu = float(df["volume"].iloc[max(0, i - 11):i + 1].mean())
+    # i kommer från _last_closed_idx() och är NEGATIVT (-1 eller -2). Koden hade
+    # max(0, i-11) vilket kollapsar till 0 för negativa i, så slicen blev
+    # iloc[0:-1] = HELA historiken (2827 barer) i stället för de senaste tolv.
+    # Kvoten blev 4.85 där den skulle vara 0.85, och villkoret "intresset dog"
+    # kunde därmed ALDRIG bli sant. Normalisera till positivt index först.
+    pos = len(df) + i if i < 0 else i
+    volbas = df["volume"].rolling(48).mean().iloc[pos]
+    volnu = float(df["volume"].iloc[max(0, pos - 11):pos + 1].mean())
     kvot = volnu / float(volbas) if volbas else None
     if kvot is None:
         rader.append("  ➖ Volymen går inte att jämföra")
@@ -140,7 +165,21 @@ def _health(conn, h: dict, df, i: int, close: float, pl_frac: float, pl: str):
         else:
             rader.append(f"  ✅ Håller jämna steg: {rel*100:+.1f}% mot BTC sedan köp")
 
-    if traffar < HEALTH_MIN_HITS:
+    # 📉 Vinsten rinner tillbaka — räcker ENSAMT. Se konstant-blocket: det är
+    # det här läget som ETHFI gick igenom helt tyst.
+    vol = features.daily_vol(db.load_recent_closes(conn, h["coin_id"], "1h", 240))
+    band = max(PEAK_DROP_MIN, PEAK_DROP_VOL_MULT * vol) if vol else PEAK_DROP_MIN
+    hw = max(h["high_water"], h["entry"])
+    topp_pl = hw / h["entry"] - 1
+    fran_topp = close / hw - 1
+    tappat = topp_pl - pl_frac
+    peak_larm = hw >= h["entry"] * PEAK_ARM and fran_topp <= -band
+
+    if peak_larm:
+        rader.insert(0, f"  📉 <b>Vinsten rinner tillbaka:</b> toppade {topp_pl*100:+.1f}%, "
+                        f"du har tappat {tappat*100:.1f} procentenheter därifrån")
+
+    if not peak_larm and traffar < HEALTH_MIN_HITS:
         return None
 
     kr = ""
@@ -150,17 +189,23 @@ def _health(conn, h: dict, df, i: int, close: float, pl_frac: float, pl: str):
         "pl": round(pl_frac, 4), "oi_since": None if oi is None else round(oi, 4),
         "vol_kvot": None if kvot is None else round(kvot, 2),
         "vs_btc": None if btc is None else round(pl_frac - btc, 4),
-        "traffar": traffar, "timmar": round(timmar), "price": close,
+        "topp_pl": round(topp_pl, 4), "fran_topp": round(fran_topp, 4),
+        "peak_larm": peak_larm, "traffar": traffar,
+        "timmar": round(timmar), "price": close,
     })])
+    rubrik = ("vinsten rinner tillbaka" if peak_larm
+              else "grunden för köpet håller inte längre")
+    stop_txt = (f" · stoppen {(close/h['stop']-1)*100:+.0f}% bort"
+                if h["stop"] else "")
     return (
-        f"🔎 <b>{h['symbol']}: grunden för köpet håller inte längre</b>\n"
-        f"  Du ligger {pl}{kr} · håller sedan {timmar/24:.0f} d\n"
+        f"🔎 <b>{h['symbol']}: {rubrik}</b>\n"
+        f"  Du ligger {pl}{kr} · håller sedan {timmar/24:.0f} d{stop_txt}\n"
         + "\n".join(rader) + "\n"
-        f"  <i>Inget säljråd — grunden för köpet finns bara inte kvar längre.\n"
-        f"  Ärligt om vad det är värt: på dina 32 senaste trades hade det gett "
-        f"+2,4 procentenheter totalt att sälja på ett sånt här larm. Alltså ingen "
-        f"skillnad. Det räddade förlorarna men kapade POL (+35%) och WLD (+21%) "
-        f"i förtid. Läs det som 'kolla varför du äger den här', inte 'sälj'.</i>"
+        f"  <i>Inget säljråd — men nu vet du. Mätt på dina 32 senaste trades gav "
+        f"det +2,4 procentenheter totalt att sälja på ett sånt här larm, alltså "
+        f"ingen skillnad: det räddade förlorarna men kapade POL (+35%) och WLD "
+        f"(+21%) i förtid. Beslutet är ditt — det här är informationen du "
+        f"saknade.</i>"
     )
 
 
