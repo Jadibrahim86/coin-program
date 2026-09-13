@@ -16,27 +16,28 @@ import db
 
 LOOKBACK_DAYS = 30
 HORIZON_H = 48
+MIN_FALL = 8            # under så många observationer markeras siffran som brus
 REPORT_WEEKDAY = 6      # 6 = söndag
 REPORT_HOUR = 17        # UTC (≈19 svensk tid)
 STATE_KEY = "last_weekly_report"
 
 
-def _bucket(meta):
-    """Grupperar på det som MÄTBART separerar utfall: trendstyrka och volym.
+def _bucket(meta, rs=None):
+    """Grupperar på de två faktorer som separerar mest: trendstyrka och släpande.
 
-    Grupperade tidigare på OI, men mätningen 2026-08-30 (n=93) visade att OI ger
-    0.2 procentenheters skillnad medan trendstyrka ger 5.1. Att fortsätta
-    redovisa OI-grupper hade fortsatt antyda att OI betyder något.
+    Grupperade tidigare på OI (0.2 pp skillnad), sedan på trend × volym. Bytt
+    2026-09-13 till trend × "har inte rusat i förväg", eftersom de är de två
+    starkaste (+5.1 respektive +4.9 procentenheter mot volymens +1.1).
     """
     import re
     import scout
     meta = meta or {}
     eff = re.search(r"eff (\d\.\d+)", meta.get("regime", "") or "")
-    b = scout.bucket_of(float(eff.group(1)) if eff else None, meta.get("vol_ratio"))
-    return {"stark/hog": "stark trend + hög volym",
-            "stark/lag": "stark trend + låg volym",
-            "svag/hog": "svag trend + hög volym",
-            "svag/lag": "svag trend + låg volym"}[b]
+    b = scout.bucket_of(float(eff.group(1)) if eff else None, rs)
+    return {"stark/slapar": "gick åt ett håll + släpade",
+            "stark/leder": "gick åt ett håll + hade rusat",
+            "svag/slapar": "sidled + släpade",
+            "svag/leder": "sidled + hade rusat"}[b]
 
 
 def build(conn, days: int = LOOKBACK_DAYS) -> str:
@@ -57,30 +58,50 @@ def build(conn, days: int = LOOKBACK_DAYS) -> str:
             return None
         return df["close"].iloc[i1] / df["close"].iloc[i0] - 1
 
+    btc_id = ids.get("BTC")
+
+    def btc_mom24(t0):
+        """BTC:s 24h-rörelse vid flaggan — för att återskapa 'släpade/hade rusat'."""
+        if not btc_id:
+            return None
+        if "BTC" not in dfs:
+            dfs["BTC"] = db.load_ohlcv_df(conn, btc_id, "1h")
+        df = dfs["BTC"]
+        if df.empty:
+            return None
+        i = df.index.get_indexer([t0], method="nearest")[0]
+        return None if i < 24 else float(df["close"].iloc[i] / df["close"].iloc[i - 24] - 1)
+
     groups = {}
     for sym, cid, ft, ts, meta in rows:
         r = fwd(cid, sym, ts, HORIZON_H)
-        m = fwd(ids.get("BTC"), "BTC", ts, HORIZON_H) if ids.get("BTC") else None
+        m = fwd(btc_id, "BTC", ts, HORIZON_H) if btc_id else None
         if r is None or m is None:
             continue
-        groups.setdefault((ft, _bucket(meta)), []).append(r - m)
+        mom, bm = (meta or {}).get("mom24"), btc_mom24(ts)
+        rs = (mom - bm) if (mom is not None and bm is not None) else None
+        groups.setdefault((ft, _bucket(meta, rs)), []).append(r - m)
 
     L = [f"📊 <b>VECKORAPPORT</b> — senaste {days} dygnen",
-         f"<i>Överavkastning mot BTC {HORIZON_H}h efter varje flagga. "
-         f"Positivt = flaggan slog marknaden.</i>"]
+         f"<i>Hur flaggorna gick jämfört med att bara äga BTC, två dygn efteråt.</i>"]
 
     titles = {"turning_up": "🟢 Vänder upp + volym",
               "falling": "🟡 Faller + volym <i>(loggas, skickas ej)</i>",
               "distribution": "🔴 Säljvolym <i>(loggas, skickas ej)</i>"}
     for ft, title in titles.items():
         lines = []
-        for b in ("stark trend + hög volym", "stark trend + låg volym",
-                  "svag trend + hög volym", "svag trend + låg volym"):
+        for b in ("gick åt ett håll + släpade", "gick åt ett håll + hade rusat",
+                  "sidled + släpade", "sidled + hade rusat"):
             v = groups.get((ft, b))
             if not v:
                 continue
             avg = sum(v) / len(v) * 100
-            lines.append(f"  {b:<24}{avg:+5.1f}%  (n={len(v)})")
+            plus = sum(1 for x in v if x > 0) / len(v)
+            # Under ~8 fall är siffran brus. Visa den, men säg det — annars läses
+            # "-3.4%" på fyra observationer som om det vore ett mönster.
+            tunt = "  <i>— för få fall för att säga något</i>" if len(v) < MIN_FALL else ""
+            lines.append(f"  {b:<30}{avg:+5.1f}%  slog BTC {round(plus*10)}/10  "
+                         f"({len(v)} fall){tunt}")
         if lines:
             L.append(f"\n<b>{title}</b>")
             L.extend(lines)

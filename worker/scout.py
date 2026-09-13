@@ -159,33 +159,25 @@ def rs_line(s: dict) -> str:
     """
     mom, rs = s["mom24"], s.get("rs_btc")
     if rs is None:
-        return f"      24h {mom*100:+.0f}%"
-
-    def pct(v):
-        return f"{abs(v)*100:.1f}%" if abs(v) < 0.01 else f"{abs(v)*100:.0f}%"
-
-    dom = (f"släpar {pct(rs)} efter marknaden" if rs < 0
-           else f"leder marknaden {pct(rs)}" if rs > 0 else "i linje med marknaden")
-    return f"      24h {mom*100:+.0f}% · BTC {(mom-rs)*100:+.0f}% · {dom}"
+        return f"      <i>Rörelse senaste dygnet: {mom*100:+.0f}%</i>"
+    # Domen ("släpar/leder") står numera på stjärnraden ovanför — här bara
+    # råsiffrorna, annars sägs samma sak två gånger i samma block.
+    return (f"      <i>Senaste dygnet: coinet {mom*100:+.0f}% · "
+            f"BTC {(mom-rs)*100:+.0f}%</i>")
 
 
-def bucket_of(eff, vol_ratio) -> str:
-    """Vilken av de fyra mätta grupperna en flagga tillhör.
+def bucket_of(eff, rs) -> str:
+    """Vilken grupp en flagga tillhör — de TVÅ STARKASTE faktorerna.
 
-    Grupperna kommer ur mätningen 2026-08-30 (n=93 flaggor, 45 dygn), där
-    trendstyrka och volym var de ENDA två kriterier som separerade utfallet:
-
-        stark trend + hög volym   +4.3%  82% positiva  (n=22)
-        stark trend + låg volym   +3.6%  67%           (n=24)
-        svag trend  + hög volym   -0.5%  33%           (n=18)
-        svag trend  + låg volym   -2.2%  25%           (n=20)
-
-    Siffrorna hårdkodas inte — flag_track_record() räknar om dem varje körning
-    ur radar_alerts, så texten korrigerar sig själv om mönstret ändras.
+    Grupperade tidigare på trendstyrka × volym. Bytt 2026-09-13 till
+    trendstyrka × "har inte rusat i förväg", eftersom de är de två som
+    separerar mest (+5.1 respektive +4.9 procentenheter, mot volymens +1.1).
+    Historiken räknas om från loggen varje körning, så inget mätvärde går
+    förlorat av bytet — bara grupperingen ändras.
     """
     stark = eff is not None and eff >= STRONG_TREND
-    hog = vol_ratio is not None and vol_ratio >= VOL_STRONG
-    return f"{'stark' if stark else 'svag'}/{'hog' if hog else 'lag'}"
+    slapar = rs is not None and rs < 0
+    return f"{'stark' if stark else 'svag'}/{'slapar' if slapar else 'leder'}"
 
 
 def flag_track_record(conn, days: int = TRACK_DAYS) -> dict:
@@ -217,6 +209,16 @@ def flag_track_record(conn, days: int = TRACK_DAYS) -> dict:
             return None
         return float(df["close"].iloc[i1] / df["close"].iloc[i0] - 1)
 
+    def btc_mom24(t0):
+        """BTC:s egen 24h-rörelse vid flaggan — behövs för att återskapa 'släpar'."""
+        if "BTC" not in cache:
+            cache["BTC"] = db.load_ohlcv_df(conn, btc_id, "1h")
+        df = cache["BTC"]
+        if df.empty:
+            return None
+        i = df.index.get_indexer([t0], method="nearest")[0]
+        return None if i < 24 else float(df["close"].iloc[i] / df["close"].iloc[i - 24] - 1)
+
     for sym, cid, ft, ts, meta in rows:
         if ts > grans:
             continue
@@ -225,56 +227,121 @@ def flag_track_record(conn, days: int = TRACK_DAYS) -> dict:
             continue
         meta = meta or {}
         eff = re.search(r"eff (\d\.\d+)", meta.get("regime", "") or "")
+        # rs loggas inte i meta — härleds ur coinets mom24 minus BTC:s vid samma tid.
+        mom, bm = meta.get("mom24"), btc_mom24(ts)
+        rs = (mom - bm) if (mom is not None and bm is not None) else None
         grupper.setdefault(
-            bucket_of(float(eff.group(1)) if eff else None, meta.get("vol_ratio")), []
+            bucket_of(float(eff.group(1)) if eff else None, rs), []
         ).append(r - m)
 
     return {k: (sum(v) / len(v), sum(1 for x in v if x > 0) / len(v), len(v))
             for k, v in grupper.items()}
 
 
-def track_line(track: dict, eff, vol_ratio) -> str | None:
-    """Raden som säger hur just den här sortens flagga faktiskt har gått."""
-    st = track.get(bucket_of(eff, vol_ratio))
+def track_line(track: dict, eff, rs) -> str | None:
+    """Hur just den här sortens läge faktiskt har gått — utan jargong.
+
+    Skrev tidigare "+4.3% mot BTC på 48h, 82% positiva (n=22)". Användaren
+    förstod varken "n=22" eller procenttalen i det sammanhanget, så det är
+    omskrivet till antal gånger av tio och hur många fall det bygger på.
+    """
+    st = track.get(bucket_of(eff, rs))
     if not st or st[2] < TRACK_MIN_N:
         return None
     snitt, andel, n = st
     dom = "✅" if snitt > 0.01 else ("⚠️" if snitt < -0.005 else "➖")
-    return (f"      {dom} <b>Såna här flaggor hittills:</b> {snitt*100:+.1f}% mot BTC "
-            f"på {TRACK_HORIZON_H}h, {andel*100:.0f}% positiva (n={n})")
+    return (f"      {dom} <b>Såna här lägen förr:</b> slog marknaden {av_tio(andel)}"
+            f" · i snitt {snitt*100:+.1f}% mot BTC · bygger på {n} tidigare fall")
+
+
+def trend_ord(eff) -> str:
+    """Trendstyrkan i klartext. "eff 0.22" säger ingenting för en människa."""
+    if eff is None:
+        return "Marknadsläget är okänt"
+    if eff >= STRONG_TREND:
+        return "Marknaden går tydligt åt ett håll"
+    if eff >= 0.35:
+        return "Marknaden rör sig, men ryckigt"
+    return "Marknaden vandrar mest i sidled"
+
+
+def av_tio(andel: float) -> str:
+    """0.63 -> "6 gånger av 10". Procent och n= är jargong; det här är inte det."""
+    return f"{round(andel * 10)} gånger av 10"
+
+
+def _vol_txt(vol: float) -> str:
+    """Decimal bara nära tröskeln, så texten aldrig säger emot villkoret."""
+    return f"{vol:.1f}×" if abs(vol - VOL_STRONG) < 1 else f"{vol:.0f}×"
+
+
+def slapar_hitrate(track: dict) -> float | None:
+    """Andel av SLÄPANDE flaggor som slog marknaden — räknad ur loggen.
+
+    Får inte hårdkodas i fotnoten. "Mönstret som funkade (AVAX)" stod kvar i två
+    månader efter att AVAX-traden gått -5.2%; en siffra som inte räknas om
+    hinner bli fel utan att någon märker det.
+    """
+    tot = [(a, n) for k, (_, a, n) in track.items() if k.endswith("/slapar")]
+    n_tot = sum(n for _, n in tot)
+    return sum(a * n for a, n in tot) / n_tot if n_tot else None
 
 
 def confluence(s: dict, regime: dict, track: dict, visade: set | None = None) -> tuple:
-    """(stjärnor, antal, rader) — bara de kriterier som MÄTBART separerar utfall.
+    """(stjärnor, antal, rader) — fyra kriterier, alla i klartext.
 
-    Var fyra stjärnor till 2026-08-30. Mätningen (n=93) visade att två av dem
-    var dekoration: OI som ja/nej gav 0.2 procentenheters skillnad, och "5d
-    positiv" var uppfyllt i 92 av 93 flaggor — ett kriterium som alltid är sant
-    skiljer ingenting. Båda är borta som stjärnor. OI står kvar som text
-    eftersom det förklarar VAD som händer, men det får inte längre låtsas
-    förutsäga något.
+    Historik: fyra stjärnor till 2026-08-30, sedan två (OI och "5d positiv" var
+    dekoration), nu fyra igen 2026-09-13. Det är inte en cirkel — de två nya är
+    inte de gamla två:
+
+      Marknaden går åt ett håll   +5.1 pp   starkast av alla, mätt tre gånger
+      Har inte rusat i förväg     +4.9 pp   ny; "släpar efter BTC"
+      Volymen ovanligt hög        +1.1 pp   svag men stabil
+      Nya pengar i derivaten (OI) +1.4 pp   SVAGAST och har bytt tecken
+
+    Om OI: den mättes inverterad på n=93 och n=46, men med n=127 pekar den åt
+    förväntat håll (slog BTC 6 ggr av 10 vid OI ≥ +2%, mot 4 av 10 under).
+    Att en effekt vänder när data läggs till betyder att den är svag. Den är med
+    för att användaren uttryckligen bad om den och för att riktningen nu stämmer
+    — men den är märkt som svagast i fotnoten, och ska kollas om igen.
+
+    Ingen siffra som bara en kvant förstår får stå här. "eff 0.22" och "n=30"
+    var obegripliga för användaren; det är hans verktyg, så de är översatta.
     """
     eff = regime.get("eff")
-    stark = eff is not None and eff >= STRONG_TREND
+    rs = s.get("rs_btc")
+    oi = s.get("oi_chg")
+    vol = s["vol_ratio"]
+
     checks = [
-        (stark,
-         f"Marknad: stark trend (eff {eff:.2f})" if stark
-         else (f"Marknad: eff {eff:.2f} — under {STRONG_TREND} där flaggan mätbart "
-               f"fungerar" if eff is not None else "Marknad: okänd")),
-        (s["vol_ratio"] >= VOL_STRONG,
-         f"Volym {s['vol_ratio']:.1f}× snittet"
-         + ("" if s["vol_ratio"] >= VOL_STRONG else f" — under {VOL_STRONG:.0f}×")),
+        (eff is not None and eff >= STRONG_TREND,
+         trend_ord(eff),
+         "Marknaden går inte tydligt åt något håll"),
+        (rs is not None and rs < 0,
+         f"Har inte rusat i förväg — släpar {abs(rs)*100:.1f}% efter marknaden"
+         if rs is not None and rs < 0 else "",
+         f"Har redan rusat före marknaden — ligger {rs*100:.1f}% före"
+         if rs is not None else "Går inte att jämföra med marknaden"),
+        # En decimal nära tröskeln, annars motsäger texten sig själv: 8.96×
+        # skrevs "9×" och underkändes i samma mening (samma fel som OI hade).
+        (vol >= VOL_STRONG,
+         f"Volymen ovanligt hög — {_vol_txt(vol)} det normala",
+         f"Volymen {_vol_txt(vol)} det normala, under {VOL_STRONG:.0f}×"),
+        (oi is not None and oi >= OI_THRESHOLD,
+         f"Nya pengar i derivaten — OI {oi*100:+.0f}%" if oi is not None else "",
+         f"Inga nya pengar i derivaten — OI {oi*100:+.1f}%"
+         if oi is not None else "Derivatdata saknas för det här coinet"),
     ]
-    n = sum(1 for ok, _ in checks if ok)
+
+    n = sum(1 for ok, _, _ in checks if ok)
     stars = "⭐" * n + "☆" * (len(checks) - n)
-    rows = [f"      {'✅' if ok else '❌'} {txt}" for ok, txt in checks]
-    _, oi_txt = oi_label("turning_up", s.get("oi_chg"))
-    rows.append(f"      ➖ {oi_txt} <i>(förklarar, förutsäger inte)</i>")
+    rows = [f"      {'✅' if ok else '❌'} {ja if ok else nej}" for ok, ja, nej in checks]
+
     # Historikraden är samma för alla coins i samma grupp — skriv den en gång
     # per utskick i stället för att upprepa identisk text sex gånger.
-    grupp = bucket_of(eff, s["vol_ratio"])
+    grupp = bucket_of(eff, rs)
     if visade is None or grupp not in visade:
-        tl = track_line(track, eff, s["vol_ratio"])
+        tl = track_line(track, eff, rs)
         if tl:
             rows.append(tl)
             if visade is not None:
@@ -379,13 +446,15 @@ def market_mode(conn) -> str | None:
     korr = float(np.nanmean(c[iu]))
     xvol = float(r.tail(6).std(axis=1).mean())
 
+    # Siffrorna står kvar sist i raden för den som vill ha dem, men orden först:
+    # "korrelation 0.51" betydde ingenting för användaren.
     if korr >= MODE_CORR_HIGH:
-        return (f"🔗 <b>Allt rör sig ihop</b> (korrelation {korr:.2f}) — coinvalet "
-                f"spelar mindre roll nu, det är insatsens storlek som är beslutet.")
+        return ("🔗 <b>Coinen rör sig nästan likadant just nu</b> — vilket du väljer "
+                "spelar mindre roll än hur mycket du satsar.")
     if korr <= MODE_CORR_LOW and xvol >= MODE_XVOL_HIGH:
-        return (f"🎯 <b>Coinvalet spelar roll</b> (korrelation {korr:.2f}, spridning "
-                f"{xvol*100:.2f}%) — coinen rör sig på egna meriter just nu.")
-    return f"<i>Korrelation {korr:.2f} · spridning {xvol*100:.2f}% (normalläge)</i>"
+        return ("🎯 <b>Coinen går sina egna vägar just nu</b> — här kan valet av coin "
+                "faktiskt avgöra utfallet.")
+    return "<i>Coinen rör sig delvis ihop — mittemellan de vanliga lägena.</i>"
 
 
 def _funding_map(conn) -> dict:
@@ -466,8 +535,12 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
     funding = _funding_map(conn)
     track = flag_track_record(conn)
 
+    # Rubriken i klartext. regime["label"] behåller "eff 0.60" eftersom den
+    # texten LOGGAS till radar_alerts.meta och parsas tillbaka av
+    # flag_track_record() — ändra aldrig formatet där, bara visningen här.
+    btc_txt = f"BTC {regime['chg']*100:+.1f}% senaste dygnet" if regime.get("chg") is not None else ""
     L = [f"📡 <b>VOLYM-RADAR</b> ({timeframe}, bevakning – ej råd) — {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC",
-         f"<i>Marknad: {regime['label']}</i>"]
+         f"<i>{trend_ord(regime.get('eff'))} · {btc_txt}</i>"]
     mode = market_mode(conn)
     if mode:
         L.append(mode)
@@ -485,7 +558,7 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
             rs_txt = f" · vs BTC {rs*100:+.0f}%" if rs is not None else ""
             if k == "turning_up":
                 stars, n, rows = confluence(s, regime, track, visade_grupper)
-                L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/2")
+                L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/4")
                 L.extend(rows)
                 L.append(rs_line(s))
                 fl = funding_line(funding.get(s["sym"]))
@@ -502,16 +575,18 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
             # Kort med flit: förklaringen står på varje utskick, så den får inte
             # vara längre än innehållet. Historiken bakom (varför fyra stjärnor
             # blev två) hör hemma i CLAUDE.md, inte i din telefon varje timme.
-            L.append("  <i>↳ ⭐ = de två kriterier som mätbart skiljer utfall: "
-                     "trendstyrka och volym. ⚠️-raden är flaggtypens egen historik, "
-                     "omräknad varje körning.</i>")
+            L.append("  <i>↳ ⭐ = fyra tecken, mätta mot systemets egna tidigare "
+                     "flaggor. Starkast är att marknaden går åt ett håll, näst "
+                     "starkast att coinet inte redan rusat. Volym och OI väger "
+                     "lättare — OI är svagast av alla och har bytt riktning mellan "
+                     "mätningar, så läs den som en ledtråd, inte ett besked.</i>")
             # Tolkningen är kontraintuitiv nog att behöva stå utskriven: att
             # SLÄPA är det gynnsamma läget. Ingen gissar det av sig själv.
-            if any(s.get("rs_btc") is not None for s in sent[k][:6]):
-                L.append("  <i>↳ Listan är sorterad med de coins som släpar efter "
-                         "marknaden först. Mätt: de har gett +4.4% mot BTC efteråt "
-                         "(69% positiva, n=39), de som redan leder −0.4 till −1.0%. "
-                         "Ingår inte i betyget än — utvärderas 13 sep.</i>")
+            hr = slapar_hitrate(track)
+            if hr is not None and any(s.get("rs_btc") is not None for s in sent[k][:6]):
+                L.append(f"  <i>↳ Att ett coin <b>släpar efter</b> marknaden är bra, inte "
+                         f"dåligt: såna har slagit marknaden {av_tio(hr)}, medan de som "
+                         f"redan rusat gått sämre. Listan har dem överst.</i>")
     if owned:
         L.append(f"\n<i>({', '.join(owned)} flaggades också men du äger dem redan — "
                  f"de bevakas av exit-vakten.)</i>")

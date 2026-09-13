@@ -205,6 +205,49 @@ korrigerar sig själv om mönstret ändras.
 snitt förlorar 1.5%. De är numera märkta med sitt eget utfall i stället för att
 tystas — användaren ville behålla valmöjligheten.
 
+### Utvärderingen 2026-09-13 — fyra stjärnor, allt i klartext
+
+Användaren sa rakt ut att han inte förstod utskicket: *"eff 0.22"*, *"n=22"* och
+*"n=30"* var obegripliga, och två stjärnor kändes för tunt. Det är hans verktyg
+och han fattar besluten — obegriplig utdata är en bugg, inte en smaksak.
+
+**All jargong är översatt.** `eff 0.22` → "Marknaden vandrar mest i sidled"
+(`trend_ord()`). `82% positiva (n=22)` → "slog marknaden 8 gånger av 10 · bygger
+på 22 tidigare fall" (`av_tio()`). Korrelationssiffran är borta ur texten och
+ersatt med vad den betyder för beslutet.
+
+> `regime["label"]` behåller formatet `"... (eff 0.60, BTC +5.0%)"` eftersom det
+> **loggas till `radar_alerts.meta` och parsas tillbaka** av
+> `flag_track_record()`. Ändra aldrig det formatet — bara visningen.
+
+**Fyra stjärnor igen, men inte de gamla fyra:**
+
+| Stjärna | Styrka | Kommentar |
+|---|---|---|
+| Marknaden går åt ett håll | +5.1 pp | starkast, mätt tre gånger |
+| Har inte rusat i förväg | +4.9 pp | ny (relativ styrka) |
+| Volymen ovanligt hög | +1.1 pp | svag men stabil |
+| Nya pengar i derivaten (OI) | +1.4 pp | **svagast, har bytt tecken** |
+
+**Om OI-stjärnan.** Den föll på n=93 och n=46 (inverterad), men med n=127 pekar
+den åt förväntat håll: OI ≥ +2% slog BTC 6 gånger av 10 mot 4 av 10 under. Att
+en effekt vänder när data läggs till betyder att den är svag. Normalisering mot
+varje coins egen OI-rörlighet (z-score och percentil) gav inget extra. Den är med
+för att användaren uttryckligen bad om den och riktningen nu stämmer — men den är
+märkt som svagast i fotnoten och ska kollas om.
+
+**De två starkaste är inte oberoende.** 37 av 41 släpande flaggor låg i stark
+trend. Men effekten håller *inom* stark trend: stark+släpar gav +5.0% (7 av 10,
+n=37) mot stark+leder +0.0% (6 av 10, n=20). Det är den renaste evidensen hittills.
+
+`bucket_of()` grupperar därför numera på **trend × släpande** i stället för
+trend × volym, och `report.py` följer med. Historiken räknas om från loggen varje
+körning, så inget mätvärde går förlorat av bytet.
+
+`slapar_hitrate()` räknar fotnotens siffra ur loggen i stället för att hårdkoda
+den — "mönstret som funkade (AVAX)" stod kvar i två månader efter att den traden
+gått −5.2%, och en siffra som inte räknas om hinner bli fel utan att någon märker.
+
 ### Mätning 2026-09-03 (n=100) — kandidat till ett tredje kriterium
 
 **Relativ styrka vid flaggan är den starkaste okvitterade faktorn**, och riktningen
