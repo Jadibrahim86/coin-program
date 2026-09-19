@@ -160,6 +160,47 @@ larmat 12 sep 23:00 medan positionen fortfarande låg **+2.0%**, med texten
 Verifierat mot 31 innehav / 158 innehavsdygn: 0.85 larm per coin och dygn, och
 första larmet gav bättre pris än användarens faktiska exit i 15 fall mot 10.
 
+## Det mest grundläggande fyndet: radarn KAN inte vara tidig
+
+Användaren frågade 2026-09-19 varför boten aldrig snappar upp coins *innan* de
+rusar — flaggorna kommer när coinet redan gått 8–16%. Svaret är inte att
+trösklarna är fel. Det är att **det vi letar efter inte föregår rörelsen.**
+
+Studie: 28 850 timmar strax före en rusning (≥ +8% på 24h, utan att coinet redan
+stigit >2%) mot 462 178 kontrolltimmar med samma utgångsläge.
+
+| Mått vid tidpunkten | Före rusning | Kontroll | AUC |
+|---|---|---|---|
+| Volym denna timme | **0.78×** | 0.72× | 0.537 |
+| Volym senaste 12h | 0.93× | 0.90× | 0.533 |
+| **OI-förändring 6h** | −0.1% | −0.3% | **0.504** |
+| OI-förändring 24h | −1.9% | −1.0% | 0.451 |
+| Prisrörelse 24h | −2.5% | −1.0% | **0.370** |
+
+*(AUC 0.50 = ren slump.)* Median volym timmen före en rusning är **under**
+snittet. Volymspiken kommer *med* rörelsen, inte före. OI på 6h är exakt slump.
+
+Konsekvensen, mätt: med volymtröskel 6× fångas **1%** av rusningarna innan de
+börjar (10 falsklarm per fångst); vid 9× fångas 0%.
+
+> **Föreslå därför aldrig att "sänka volymtröskeln för att hinna tidigare".**
+> Det är inte en tröskelfråga. Radarn är en *samtidig* detektor av rörelser som
+> redan pågår, och ska läsas så. Mätt på 158 flaggor: median 44% av hela
+> uppgången var redan gjord när flaggan gick.
+
+Det enda som föregår rusningar är att coinet **fallit** — och sambandet är
+U-format (basrat 5.3%):
+
+| Senaste 24h | Sannolikhet för rusning |
+|---|---|
+| Stigit >5% | 10.0% |
+| Mitten (−5% till +5%) | ~4% |
+| Fallit 10–15% | 15.7% |
+| Fallit >15% | **31.7%** |
+
+Men se nästa avsnitt innan du bygger något på det — att en studs är *sannolikare*
+betyder inte att den är lönsam, och det går inte att se när fallet är klart.
+
 ## 👁 Bevakningslistan — och varför den inte försöker hitta bottnar
 
 `watchlist.py` + `/bevaka XRP`. **Den enda larmtypen i systemet som triggar på
