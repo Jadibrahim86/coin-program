@@ -9,6 +9,7 @@ python worker/cli.py ingest-ohlcv
 python worker/cli.py ingest-oi
 python worker/cli.py radar --timeframe 1h
 python worker/cli.py exit-watch
+python worker/cli.py watch            # bevakningslistan (/bevaka), tyst om inget andrats
 python worker/cli.py stress
 python worker/cli.py weekly-report      # no-op utom söndagar
 

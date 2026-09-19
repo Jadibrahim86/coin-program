@@ -190,6 +190,8 @@ def handle_command(conn, text: str) -> str:
             "<code>/buy WLD 0.34 0.30</code> — egen stop-kurs\n"
             "<code>/sell WLD 0.36</code> — stäng bevakning\n"
             "<code>/positions</code> (/innehav) — innehav med P/L\n"
+            "<code>/bevaka XRP</code> — följ ett coin du INTE äger\n"
+            "<code>/sluta XRP</code> · <code>/bevakning</code> — sluta följa / se listan\n"
             "<i>Lägg till ! sist för att kringgå priskontrollen.</i>\n\n"
             f"Bevakar {len(watched)} coins: {' '.join(watched)}\n"
             "<i>Jag kollar dina innehav varje timme och larmar vid stop, vikande topp "
@@ -201,6 +203,54 @@ def handle_command(conn, text: str) -> str:
         return ("Det kommandot finns inte längre — du anger insatsen per trade i stället:\n"
                 "<code>/buy WLD 0.34 1000kr</code> (eller lägg till <code>risk20</code> "
                 "för egen stop-gräns).")
+
+    if cmd in ("/bevaka", "/watch"):
+        if len(parts) < 2:
+            return ("Skriv: /bevaka SYMBOL — t.ex. <code>/bevaka XRP</code>\n"
+                    "Då hör jag av mig när något ändras i coinet: riktning, "
+                    "handel, derivat eller läge. Du behöver inte äga den.")
+        sym = parts[1].upper()
+        cid = coin_ids.get(sym)
+        if cid is None:
+            return f"Känner inte till {sym}. Coins: {' '.join(sorted(coin_ids))}"
+        if db.get_watch(conn, cid):
+            return f"{sym} bevakas redan — <code>/sluta {sym}</code> för att sluta."
+        pris = db.get_last_close(conn, cid)
+        db.add_watch(conn, cid, pris)
+        import watchlist
+        return (f"👁 Bevakar <b>{sym}</b>{f' från {pris:g}' if pris else ''}.\n"
+                f"Jag hör av mig när riktningen, handeln, derivaten eller läget "
+                f"ändras — som mest var {watchlist.MIN_TIMMAR_MELLAN}:e timme.\n"
+                f"<i>Obs: jag kan säga vad som HAR hänt, inte vart det ska. De "
+                f"fyra vanliga bottentecknen är mätta på 43 000 timmar och inget "
+                f"av dem förutsade något.</i>")
+
+    if cmd in ("/sluta", "/unwatch"):
+        if len(parts) < 2:
+            return "Skriv: /sluta SYMBOL — t.ex. /sluta XRP"
+        sym = parts[1].upper()
+        cid = coin_ids.get(sym)
+        wid = db.get_watch(conn, cid) if cid else None
+        if not wid:
+            return f"{sym} bevakas inte just nu."
+        db.stop_watch(conn, wid)
+        return f"👁 Slutar bevaka <b>{sym}</b>."
+
+    if cmd in ("/bevakning", "/bevakade"):
+        lista = db.load_watchlist(conn)
+        if not lista:
+            return "Inga bevakade coins. Lägg till med t.ex. /bevaka XRP"
+        rader = ["<b>Du bevakar:</b>"]
+        for w in lista:
+            pris = db.get_last_close(conn, w["coin_id"])
+            f = ""
+            if pris and w["start_price"]:
+                f = f" · {(pris/w['start_price']-1)*100:+.1f}% sedan start"
+            st = w["last_state"] or {}
+            lage = " · ".join(x for x in (st.get("riktning"), st.get("volym")) if x)
+            rader.append(f"• <b>{w['symbol']}</b> {pris:g}{f}"
+                         + (f"\n  <i>{lage}</i>" if lage else ""))
+        return "\n".join(rader)
 
     if cmd in ("/positions", "/pos", "/innehav"):
         holdings = db.load_open_holdings(conn)

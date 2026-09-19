@@ -52,7 +52,7 @@ radarn påstår sig inte ha en edge, den pekar bara med strålkastare.
 **VPS** (Hetzner-liknande, Ubuntu, EU-region, `/root/coin-program`):
 
 - `run_pipeline.sh` via cron varje timme (`5 * * * *`) → `git pull` →
-  `ingest-ohlcv` → `ingest-oi` → `radar` → `exit-watch` → `stress` →
+  `ingest-ohlcv` → `ingest-oi` → `radar` → `exit-watch` → `watch` → `stress` →
   `weekly-report` (no-op utom söndagar) → `systemctl try-restart coin-bot`.
 - `coin-bot.service` (systemd) kör `telegram_bot.py` som daemon → svarar på
   `/buy`, `/sell`, `/positions` direkt.
@@ -91,6 +91,7 @@ står i koden; kortversionen:
 | 📉 Vinsten rinner tillbaka | `exit_watch.py` | **Ja** — del av hälsokollen, räcker ensamt |
 | 🟠 Vinsten vänder | `exit_watch.py` | **Borttaget** — se nedan |
 | ❌ Stop bruten · 📉 Trail · 🔴 Säljvolym på innehav | `exit_watch.py` | Ja |
+| 👁 Bevakningslistan | `watchlist.py` | **Ja** — vid lägesbyte, max var 8:e timme |
 | 🌩️ Marknadslarm · 📊 Veckorapport | `stress.py` · `report.py` | Ja |
 
 `scout.SEND_SECTIONS` styr vilka mönster som går ut. Alla tre klassas och loggas
@@ -159,6 +160,46 @@ larmat 12 sep 23:00 medan positionen fortfarande låg **+2.0%**, med texten
 Verifierat mot 31 innehav / 158 innehavsdygn: 0.85 larm per coin och dygn, och
 första larmet gav bättre pris än användarens faktiska exit i 15 fall mot 10.
 
+## 👁 Bevakningslistan — och varför den inte försöker hitta bottnar
+
+`watchlist.py` + `/bevaka XRP`. **Den enda larmtypen i systemet som triggar på
+FÖRÄNDRING i stället för på tröskel.** Coinets läge delas in i grova tillstånd
+(riktning, handel, derivat, läge i spannet) och användaren hörs av när något av
+dem byter — inte när ett värde passerar en gräns.
+
+Den skillnaden är avsiktlig och vilar på en mätning. 2026-09-19 gick 43 153
+timmar *mitt i ras* (≥10% ned på 48h, 41 coins) igenom de fyra tecken som brukar
+kallas botten:
+
+| Tecken | Bästa gruppen | Sämsta gruppen | Skillnad |
+|---|---|---|---|
+| Avtagande säljvolym | +0.73% | +0.89% | ingen |
+| Momentum vänt upp | +0.88% | +1.08% (faller ännu!) | ingen |
+| Högre botten | +1.12% | +0.92% | ingen |
+| OI slutat falla | +2.32% | −0.26% | n≈250, ej monotont |
+
+**Inget av dem separerade utfallet**, och varje grupp gick i snitt 6–8% längre
+ner. Det finns alltså ingen observerbar punkt där ett fall kan sägas vara över.
+Därför påstår modulen ingenting om riktning — den rapporterar vad som ändrats
+och låter användaren döma. Att beskriva ett tillstånd går; att förutsäga en
+vändning går bevisligen inte.
+
+Samma mätning underkände också den kapitulationsflagga jag själv föreslagit
+(«fallit >10% + volym >6×» gav +2.44% mot BTC): 494 av 495 träffar hade
+fortfarande fallande momentum. Kniven *var* signalen, och att vänta på
+vändningen gav n=1. Bygg inte om den utan nytt underlag.
+
+**Trögheten är det som gör den användbar.** Första versionen hade fem lägen per
+mått med fasta gränser och gav **5.5 rapporter per coin och dygn** — riktningen
+darrade över gränsen 814 gånger på 12 coins under tre veckor. Två ändringar tog
+ner det till 1.3/dygn: färre lägen, och `TROGHET` som kräver att värdet tar sig
+en bit *in* i det nya läget innan bytet räknas. Riktningen skalas dessutom mot
+coinets egen dagsvolatilitet, som stoppen gör.
+
+Allt loggas som `watch` i `radar_alerts` så lägesbytena kan utvärderas senare —
+visar sig något av dem förutsäga något har vi underlag att bygga ett riktigt
+tecken på då.
+
 ## Universum
 
 44 coins i `config.UNIVERSE`. Urvalsregler som gäller:
@@ -195,6 +236,9 @@ historiken växer timvis.
 /buy WLD 0.34 0.30               egen stop-kurs
 /sell WLD 0.36                   stäng bevakning (pris valfritt)
 /positions  (/pos, /innehav)     innehav med P/L
+/bevaka XRP  (/watch)            följ ett coin du INTE äger
+/sluta XRP   (/unwatch)          sluta följa
+/bevakning   (/bevakade)         se bevakningslistan
 /help                            hjälp
 ```
 

@@ -130,6 +130,20 @@ create table if not exists holdings (
     exit_price     numeric
 );
 
+-- Bevakningslista: coins du följer UTAN att äga dem (/bevaka XRP). Till skillnad
+-- från alla andra larm triggar den på att coinets TILLSTÅND flyttat sig sedan
+-- förra rapporten, inte på att ett värde passerat en tröskel. last_state håller
+-- det senast rapporterade läget så förändringen går att räkna ut.
+create table if not exists watchlist (
+    id          bigint generated always as identity primary key,
+    coin_id     bigint not null references coins(id),
+    start_price numeric,
+    last_state  jsonb,                             -- senast RAPPORTERADE läget
+    last_report timestamptz,
+    started_at  timestamptz not null default now(),
+    stopped_at  timestamptz
+);
+
 -- Telegram-botens tillstånd (getUpdates-offset m.m.).
 create table if not exists bot_state (
     key   text primary key,

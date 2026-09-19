@@ -249,8 +249,70 @@ def ensure_exit_tables(conn) -> None:
                 key   text primary key,
                 value text not null
             );
+            -- Bevakningslista: coins du följer UTAN att äga dem (/bevaka XRP).
+            -- last_state hall det senast RAPPORTERADE tillstandet, sa vi kan
+            -- larma pa foranding i stallet for pa troskel.
+            create table if not exists watchlist (
+                id          bigint generated always as identity primary key,
+                coin_id     bigint not null references coins(id),
+                start_price numeric,
+                last_state  jsonb,
+                last_report timestamptz,
+                started_at  timestamptz not null default now(),
+                stopped_at  timestamptz
+            );
             """
         )
+    conn.commit()
+
+
+def add_watch(conn, coin_id: int, start_price) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO watchlist (coin_id, start_price) VALUES (%s, %s)",
+            (coin_id, start_price),
+        )
+    conn.commit()
+
+
+def get_watch(conn, coin_id: int):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM watchlist WHERE coin_id = %s AND stopped_at IS NULL",
+            (coin_id,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def load_watchlist(conn) -> list:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT w.id, w.coin_id, c.symbol, w.start_price, w.last_state,
+                   w.last_report, w.started_at
+            FROM watchlist w JOIN coins c ON c.id = w.coin_id
+            WHERE w.stopped_at IS NULL ORDER BY w.started_at
+            """
+        )
+        return [{"id": i, "coin_id": cid, "symbol": s,
+                 "start_price": float(p) if p is not None else None,
+                 "last_state": st, "last_report": lr, "started_at": sa}
+                for i, cid, s, p, st, lr, sa in cur.fetchall()]
+
+
+def update_watch(conn, watch_id: int, state: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE watchlist SET last_state = %s, last_report = now() WHERE id = %s",
+            (json.dumps(_json_safe(state)), watch_id),
+        )
+    conn.commit()
+
+
+def stop_watch(conn, watch_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE watchlist SET stopped_at = now() WHERE id = %s", (watch_id,))
     conn.commit()
 
 

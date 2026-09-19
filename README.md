@@ -20,7 +20,8 @@ granska själv — den missar mer än den träffar.
 | **Exit-vakt** ([exit_watch.py](worker/exit_watch.py)) | Dina innehav: 🔎 hälsokoll (håller grunden för köpet?) · ❌ stop bruten · 📉 topp som viker · 🔴 säljvolym. |
 | **Marknadslarm** ([stress.py](worker/stress.py)) | När marknaden beter sig extremt: brett fall, allt rör sig ihop, vilda rörelser, likvidationskaskad. |
 | **Veckorapport** ([report.py](worker/report.py)) | Söndagar: betygsätter systemets egna flaggor mot BTC. Självutvärdering, inte självberöm. |
-| **Telegram-bot** ([telegram_bot.py](worker/telegram_bot.py)) | `/buy` `/sell` `/positions` — du registrerar vad du köpt, boten bevakar det. |
+| **Bevakningslista** ([watchlist.py](worker/watchlist.py)) | 👁 Coins du följer utan att äga. Larmar när coinets **läge ändras** — riktning, handel, derivat — inte när ett värde passerar en tröskel. |
+| **Telegram-bot** ([telegram_bot.py](worker/telegram_bot.py)) | `/buy` `/sell` `/positions` `/bevaka` — du registrerar vad du köpt eller följer, boten bevakar det. |
 
 ## Telegram-kommandon
 
@@ -31,6 +32,8 @@ granska själv — den missar mer än den träffar.
 /buy WLD 0.34 0.30               egen stop-kurs
 /sell WLD 0.36                   stäng bevakning
 /positions  (/innehav)           innehav med P/L
+/bevaka XRP                      följ ett coin du inte äger
+/sluta XRP · /bevakning          sluta följa · se listan
 /help                            hjälp
 ```
 

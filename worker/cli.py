@@ -87,6 +87,10 @@ def main() -> None:
     p_ew.add_argument("--timeframe", default="1h")
     p_ew.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
 
+    p_w = sub.add_parser("watch", help="Bevakningslistan: rapportera när något ändrats i ett bevakat coin")
+    p_w.add_argument("--timeframe", default="1h")
+    p_w.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
+
     p_st = sub.add_parser("stress", help="Marknadslarm: extrem/onormal marknad + hur innehaven påverkas")
     p_st.add_argument("--no-send", action="store_true", help="Skicka inte Telegram (torrkörning)")
 
@@ -155,6 +159,9 @@ def main() -> None:
         elif args.cmd == "exit-watch":
             import exit_watch
             exit_watch.run(conn, args.timeframe, send=not args.no_send)
+        elif args.cmd == "watch":
+            import watchlist
+            watchlist.run(conn, args.timeframe, send=not args.no_send)
         elif args.cmd == "stress":
             import stress
             stress.run(conn, send=not args.no_send)
