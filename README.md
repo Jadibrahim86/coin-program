@@ -17,7 +17,7 @@ granska själv — den missar mer än den träffar.
 | Jobb | Vad det larmar om |
 |---|---|
 | **Radar** ([scout.py](worker/scout.py)) | 🟢 coin som vänder upp med volym bakom sig — möjligt köpläge, med flaggtypens **egen träffhistorik** i utskicket. Tystas i chop/risk-off, och coins du redan äger filtreras bort. |
-| **Exit-vakt** ([exit_watch.py](worker/exit_watch.py)) | Dina innehav: 🔎 hälsokoll (håller grunden för köpet?) · ❌ stop bruten · 📉 topp som viker · 🔴 säljvolym. |
+| **Exit-vakt** ([exit_watch.py](worker/exit_watch.py)) | Dina innehav: 🔎 hälsokoll (håller grunden för köpet? rinner vinsten tillbaka? vänder marknaden också?) · ❌ stop bruten · 📉 topp som viker · 🔴 säljvolym. |
 | **Marknadslarm** ([stress.py](worker/stress.py)) | När marknaden beter sig extremt: brett fall, allt rör sig ihop, vilda rörelser, likvidationskaskad. |
 | **Veckorapport** ([report.py](worker/report.py)) | Söndagar: betygsätter systemets egna flaggor mot BTC. Självutvärdering, inte självberöm. |
 | **Bevakningslista** ([watchlist.py](worker/watchlist.py)) | 👁 Coins du följer utan att äga. Larmar när coinets **läge ändras** — riktning, handel, derivat — inte när ett värde passerar en tröskel. |

@@ -32,7 +32,7 @@ from live_signals import _is_stale, _last_closed_idx
 
 MIN_TIMMAR_MELLAN = 8        # aldrig mer än var åttonde timme per coin
 MIN_PRIS_ANDRING = 0.05      # prisläget byts först vid 5% rörelse sedan senast
-TROGHET = 0.30               # hur långt in i nästa läge värdet måste ta sig
+TROGHET = 0.50               # hur långt förbi gränsen värdet måste ta sig (se _lage)
 
 # Lägesindelningar. GROVA med flit. Första versionen hade fem lägen per mått med
 # fasta gränser, och gav 5.5 rapporter per coin och dygn — riktningen darrade
@@ -45,10 +45,23 @@ TROGHET = 0.30               # hur långt in i nästa läge värdet måste ta si
 #
 # Riktningen skalas dessutom mot coinets egen dagsvolatilitet — 1% betyder
 # något helt annat för BTC än för ETHFI. Samma princip som stoppen använder.
-RIKTNING_MULT = [
-    (-9.0, -0.5, "faller"),
+#
+# Omkalibrerat 2026-09-23 efter tröghetsbuggen (se _lage). Med rättad tröghet
+# gav de gamla inställningarna 2.8 rapporter per coin och dygn — nästan taket
+# (3/dygn vid 8h-spärr). De 1.3/dygn vi mätte först var alltså delvis lägen som
+# satt fast. Riktningen på 6h stod för nästan hälften av alla byten: ett
+# 6h-fönster vänder flera gånger om dagen oavsett gräns. Replay 12 coins × 21
+# dygn, riktiga las_tillstand():
+#   6h ±0.25σ, OI ±2%, tröghet 0.3 (gamla)   2.81/dygn
+#   24h ±0.5σ, tröghet 0.5                    2.15
+#   24h ±0.5σ, OI ±3%, tröghet 0.5 (valt)     2.01   0 fastlåsta timmar
+# Längre ner än ~2/dygn går det inte utan att tysta riktiga byten — fem mått
+# som vart och ett byter läge ungefär en gång per dygn.
+RIKTNING_TIMMAR = 24         # dygnsriktning: användaren håller i dagar, inte timmar
+RIKTNING_MULT = [            # i "normala dygnsrörelser" (σ), se ref i las_tillstand
+    (-99.0, -0.5, "faller"),
     (-0.5, 0.5, "står stilla"),
-    (0.5, 9.0, "stiger"),
+    (0.5, 99.0, "stiger"),
 ]
 VOLYM = [
     (0.0, 0.5, "nästan ingen handel"),
@@ -56,31 +69,47 @@ VOLYM = [
     (2.0, 6.0, "förhöjd handel"),
     (6.0, 1e9, "volymspik"),
 ]
-OI = [
-    (-9.0, -0.02, "pengar lämnar"),
-    (-0.02, 0.02, "oförändrat"),
-    (0.02, 9.0, "nya pengar in"),
+OI = [                       # ±3% = kvartilerna av 12 060 mätta 24h-förändringar
+    (-9.0, -0.03, "pengar lämnar"),
+    (-0.03, 0.03, "oförändrat"),
+    (0.03, 9.0, "nya pengar in"),
+]
+PLATS = [
+    (0.0, 0.25, "nära botten"),
+    (0.25, 0.75, "mitt i spannet"),
+    (0.75, 1.0, "nära toppen"),
 ]
 
 
 def _lage(tabell, varde, gammalt: str | None = None):
     """Vilket läge värdet hamnar i — med tröghet mot det gamla läget.
 
-    Sitter man redan i ett läge krävs att värdet tar sig TROGHET av nästa
-    läges bredd förbi gränsen innan bytet räknas.
+    Sitter man redan i ett läge måste värdet ta sig en bit förbi gränsen innan
+    bytet räknas: TROGHET × det SMALASTE av de två lägen som möts där.
+
+    Fram till 2026-09-23 var marginalen TROGHET × det GAMLA lägets bredd. För
+    ytterlägena (OI "nya pengar in" = +2% till +900%) blev det 2.7 = 270
+    procentenheter, så derivat-raden satt fast på "nya pengar in" medan OI föll
+    50%, och riktningen hoppade stiger → faller utan att någonsin passera
+    "står stilla". Replayen visade det som "OI bytte läge bara 7 gånger", och
+    jag läste det som stabilt i stället för som fastlåst.
     """
     if varde is None:
         return None
     traff = next((n for lo, hi, n in tabell if lo <= varde < hi), tabell[-1][2])
-    if gammalt is None or traff == gammalt:
+    namn = [n for _, _, n in tabell]
+    if gammalt is None or traff == gammalt or gammalt not in namn:
         return traff
-    for lo, hi, namn in tabell:
-        if namn != gammalt:
-            continue
-        bredd = min(hi - lo, 1e6)
-        marginal = TROGHET * bredd
-        if lo - marginal <= varde < hi + marginal:
-            return gammalt          # kvar i gamla läget, för nära gränsen
+    k = namn.index(gammalt)
+    lo, hi, _ = tabell[k]
+
+    def bredd(j):
+        return tabell[j][1] - tabell[j][0]
+
+    m_lo = TROGHET * min(bredd(k), bredd(k - 1)) if k > 0 else 0.0
+    m_hi = TROGHET * min(bredd(k), bredd(k + 1)) if k < len(tabell) - 1 else 0.0
+    if lo - m_lo <= varde < hi + m_hi:
+        return gammalt              # kvar i gamla läget, för nära gränsen
     return traff
 
 
@@ -99,40 +128,37 @@ def las_tillstand(conn, w: dict, timeframe: str = "1h") -> dict | None:
 
     mom6 = float(c / df["close"].iloc[pos - 6] - 1)
     mom24 = float(c / df["close"].iloc[pos - 24] - 1) if pos >= 24 else None
+    momr = float(c / df["close"].iloc[pos - RIKTNING_TIMMAR] - 1) \
+        if pos >= RIKTNING_TIMMAR else None
     oi = db.oi_since(conn, w["coin_id"], w["started_at"])
     oi24 = db.oi_change(conn, w["coin_id"], 24)
 
     # Riktningen mäts i coinets egna mått: ett 1%-hopp är brus för ETHFI och en
-    # händelse för BTC. Dagsvol delat på 4 ~ typisk 6h-rörelse.
+    # händelse för BTC. ref = typisk rörelse över fönstret (dagsvol × √(h/24)),
+    # så RIKTNING_MULT är i "normala rörelser".
     dagsvol = features.daily_vol(df["close"].iloc[max(0, pos - 240):pos + 1].tolist())
-    ref = (dagsvol / 4) if dagsvol else 0.01
+    ref = (dagsvol * (RIKTNING_TIMMAR / 24) ** 0.5) if dagsvol else 0.01
     gam = w.get("last_state") or {}
 
-    # Läge i intervallet sedan bevakningen började
-    sedan = df["close"].iloc[max(0, pos - 24 * 14):pos + 1]
+    # Läge i intervallet sedan bevakningen började. Bara STÄNGDA barer — den
+    # pågående baren kunde annars sätta en topp/botten som inte finns kvar.
+    stangda = df["close"].iloc[:pos + 1]
+    sedan = stangda.iloc[max(0, pos - 24 * 14):]
     if w["start_price"]:
-        sedan = df["close"][df.index >= w["started_at"]]
+        sedan = stangda[stangda.index >= w["started_at"]]
     lag = float(sedan.min()) if len(sedan) else c
     hog = float(sedan.max()) if len(sedan) else c
     spann = (hog - lag) or 1e-9
     plats = (c - lag) / spann
-
-    if plats < 0.25:
-        plats_namn = "nära botten"
-    elif plats > 0.75:
-        plats_namn = "nära toppen"
-    else:
-        plats_namn = "mitt i spannet"
-    # tröghet även på läget i spannet
-    if gam.get("plats") and abs(plats - (0.25 if gam["plats"] == "nära botten"
-                                         else 0.75 if gam["plats"] == "nära toppen"
-                                         else plats)) < 0.08:
-        plats_namn = gam["plats"]
+    # Samma tröghet som övriga lägen. Den gamla specialkoden jämförde "mitt i
+    # spannet" med sig själv (avstånd 0), så det läget gick aldrig att lämna.
+    plats_namn = _lage(PLATS, plats, gam.get("plats"))
 
     return {
         "pris": c,
         "sedan_start": (c / w["start_price"] - 1) if w["start_price"] else None,
-        "riktning": _lage(RIKTNING_MULT, mom6 / ref if ref else None, gam.get("riktning")),
+        "riktning": _lage(RIKTNING_MULT, momr / ref if (ref and momr is not None) else None,
+                          gam.get("riktning")),
         "volym": _lage(VOLYM, volkvot, gam.get("volym")),
         "oi": _lage(OI, oi24, gam.get("oi")),
         "plats": plats_namn,
@@ -201,7 +227,8 @@ def bygg_rapport(w: dict, s: dict, andringar: list, forsta: bool) -> str:
             L.append(f"  🔄 <b>{ETIKETT[nyckel]}:</b> {fran} → <b>{till}</b>")
 
     L.append("")
-    L.append(f"  Just nu: {s['riktning']} · {s['volym']} · {s['oi']} · {s['plats']}")
+    lagen = [s["riktning"], s["volym"], s["oi"] or "derivatdata saknas", s["plats"]]
+    L.append(f"  Just nu: {' · '.join(x for x in lagen if x)}")
     detalj = []
     if s["_mom6"] is not None:
         detalj.append(f"6h {s['_mom6']*100:+.1f}%")

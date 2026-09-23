@@ -124,8 +124,9 @@ def build(conn, days: int = LOOKBACK_DAYS) -> str:
             L.append(f"  {len(ratt)} av {len(moves)} gånger föll priset efter varningen "
                      f"({HORIZON_H}h) · snitt {snitt:+.1f}%")
             L.append(f"  <i>Negativt snitt = varningen kom i tid. Positivt = du hade "
-                     f"tjänat på att sitta kvar. Vid mätningen 2026-08-30 var det ett "
-                     f"nollsummespel (+2,4 procentenheter på 32 trades).</i>")
+                     f"tjänat på att sitta kvar. Mätt 2026-09-23 på 28 trades: sälj på "
+                     f"första varningen slog ditt eget sälj 18 gånger, men förlorade "
+                     f"totalt — missarna var de största vinnarna.</i>")
 
     closed = db.load_closed_holdings(conn, days)
     if closed:

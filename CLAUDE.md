@@ -89,6 +89,7 @@ står i koden; kortversionen:
 | 💰 Funding-extremer | `scout.py` | **Borttaget** som eget utskick |
 | 🔎 Hälsokoll på innehav | `exit_watch.py` | **Ja** — max 2×/dygn och coin |
 | 📉 Vinsten rinner tillbaka | `exit_watch.py` | **Ja** — del av hälsokollen, räcker ensamt |
+| 📉 Marknaden vänder också | `exit_watch.py` | **Ja** — del av hälsokollen, räcker ensamt (2026-09-23) |
 | 🟠 Vinsten vänder | `exit_watch.py` | **Borttaget** — se nedan |
 | ❌ Stop bruten · 📉 Trail · 🔴 Säljvolym på innehav | `exit_watch.py` | Ja |
 | 👁 Bevakningslistan | `watchlist.py` | **Ja** — vid lägesbyte, max var 8:e timme |
@@ -159,6 +160,33 @@ larmat 12 sep 23:00 medan positionen fortfarande låg **+2.0%**, med texten
 
 Verifierat mot 31 innehav / 158 innehavsdygn: 0.85 larm per coin och dygn, och
 första larmet gav bättre pris än användarens faktiska exit i 15 fall mot 10.
+
+### 📉 "Marknaden vänder också" (2026-09-23)
+
+Användaren: *"ligger toppen på +20% och den börjar neråt vill jag hellre sälja på
++17% än +11%"*. PEAK-bandet är max(4%, 1 × dagsvol) — på ett 8%/dag-coin just
++20 → +12. Ett snävare band rakt av förlorade i simuleringen (vinnare dippar 3–5%
+på vägen upp). Men när **BTC också** vänder från sin topp sedan köpet är dippen
+oftare äkta. Därför ett andra villkor i `_health()`, armerat som PEAK (topp ≥ +5%):
+coinet ≥ 3% från din topp **och** BTC ≥ 1.5% från sin topp sedan köpet
+(`BTC_CONFIRM_*`, `_btc_lage()` på stängda barer).
+
+Replay med riktiga `_health()` mot 37 innehav / 191 dygn: 0.87 → 0.90 larm per
+coin och dygn. Första 📉 kom tidigare i 5 innehav — bättre pris i 4 (ETHFI
++6.9% mot +2.0%) och sämre i 1 som kostade mer än de fyra gav (ZEC +3.6% mot
++19.3%). Det flyttar varningen tidigare, det gör inte strategin bättre. Skeppat
+för att användaren uttryckligen vill ha den — som information, inte säljorder.
+
+**Fotnoten i 🔎 hade varit fel i tio dagar.** Den sa "+2,4 procentenheter på 32
+trades, ingen skillnad", mätt medan volym-villkoret var trasigt. Omgjord med
+rättad kod: sälj på första 🔎 slog användarens eget sälj i 18 av 28 trades men
+gav **totalt minus** (ZEC −60, POL −34, OP −26, WLD −25 procentenheter). Texten
+i `exit_watch.py` och `report.py` är nu daterad — gör om mätningen
+(`verifiera_btc_topp.py`-mönstret) när den börjar bli gammal.
+
+`--no-send` skriver numera ingen larmstatus i exit-vakten (dedup-logg,
+`stop_alerted`, `trail_alert_at`). Förut gjorde den det, och eftersom loggen
+också är dedupen kunde en torrkörning tysta nästa timmes riktiga larm.
 
 ## Det mest grundläggande fyndet: radarn KAN inte vara tidig
 
@@ -236,6 +264,22 @@ darrade över gränsen 814 gånger på 12 coins under tre veckor. Två ändringa
 ner det till 1.3/dygn: färre lägen, och `TROGHET` som kräver att värdet tar sig
 en bit *in* i det nya läget innan bytet räknas. Riktningen skalas dessutom mot
 coinets egen dagsvolatilitet, som stoppen gör.
+
+**De 1.3/dygn var delvis en bugg (hittad 2026-09-23).** Marginalen var TROGHET ×
+det *gamla* lägets bredd, och ytterlägena är öppna (OI "nya pengar in" = +2% till
++900%), så marginalen blev 270 procentenheter. Derivat-raden satt fast på "nya
+pengar in" medan OI föll 50%, riktningen hoppade stiger → faller utan att passera
+"står stilla", och "mitt i spannet" jämfördes med sig självt och gick aldrig att
+lämna. Replayen visade "OI bytte läge bara 7 gånger" — jag läste det som stabilt.
+**Ett mått som nästan aldrig ändras ska misstänkas, inte berömmas.**
+
+Rättat i `_lage()`: marginalen = TROGHET × det *smalaste* av de två lägen som möts
+vid gränsen. Med rätt tröghet gav de gamla inställningarna 2.8/dygn, nära taket
+(3/dygn vid 8h-spärr). Omkalibrerat mot replay (12 coins × 21 dygn, riktiga
+`las_tillstand()`, 0 fastlåsta timmar): riktning på **24h** i stället för 6h
+(±0.5 normala dygnsrörelser), OI ±3% (kvartilerna), TROGHET 0.5 → **2.0/dygn**.
+Lägre än så går inte utan att tysta riktiga byten. Vid första körningen efter
+deploy rättar sig fastlåsta lägen, så räkna med en omgång rapporter.
 
 Allt loggas som `watch` i `radar_alerts` så lägesbytena kan utvärderas senare —
 visar sig något av dem förutsäga något har vi underlag att bygga ett riktigt
@@ -365,6 +409,23 @@ n=37) mot stark+leder +0.0% (6 av 10, n=20). Det är den renaste evidensen hitti
 `bucket_of()` grupperar därför numera på **trend × släpande** i stället för
 trend × volym, och `report.py` följer med. Historiken räknas om från loggen varje
 körning, så inget mätvärde går förlorat av bytet.
+
+**Halva stjärnor (2026-09-23).** Användaren: *"9× ger grön bock, 8.9× ger kryss
+och en hel stjärna försvinner"*. Mellanzoner där mätningen (172 flaggor) stöder
+det, konstanterna i `scout.py`:
+
+| Stjärna | ◐ halv | ✅ hel | Underlag för mellanzonen |
+|---|---|---|---|
+| Trend | eff 0.40–0.55 | ≥ 0.55 | tydlig trappa: −1.5 / +0.8 / +3.9% |
+| OI | +2–4% | ≥ +4% | steget ligger vid 4% (36–40% → 58–61% slog BTC) |
+| Volym | 7–9× | ≥ 9× | **ingen** trappa (6–7× 55%, 9–12× 53%) — tar bara bort klippkanten |
+| Släpar | — | < 0 | ren uppdelning vid noll, ingen halv |
+
+Volymens halva börjar vid 7× och inte 6× eftersom 6× är kravet för att flaggan
+ska gå alls. Siffror nära en gräns avrundas **nedåt** (`_ned()`), så 8.96× står
+som "8.9×" bredvid halvstjärnan i stället för "9.0×". `stjarnor_for()` används av
+både betyget och `sort_key()`, så listan står i stjärnornas ordning. Betyget
+visas som `⭐⭐½☆ 2½/4`.
 
 `slapar_hitrate()` räknar fotnotens siffra ur loggen i stället för att hårdkoda
 den — "mönstret som funkade (AVAX)" stod kvar i två månader efter att den traden

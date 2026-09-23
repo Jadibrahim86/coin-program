@@ -20,6 +20,7 @@ Innehav filtreras bort ur 🟢 — ett coin du redan äger är inget nytt köpl�
 (−0.5 till −1.5% på 48h, n=26 i veckorapporten 2026-08-16). Strålkastare att
 GRANSKA SJÄLV, inte autoköp. Dedup hindrar upprepning inom DEDUP_HOURS.
 """
+import math
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -80,6 +81,25 @@ VOL_STRONG = 9.0            # höjd 8→9 2026-08-30: ≥9× gav +2.0% mot +0.9%
 # Skillnaden (5.1 procentenheter) är större än alla andra kriterier tillsammans.
 STRONG_TREND = 0.55
 
+# --- Halva stjärnor (2026-09-23) ---------------------------------------------
+# Användaren: "9× ger grön bock, 8.9× ger kryss och en hel stjärna försvinner".
+# En hård gräns säger att 8.9 och 9.0 är olika saker. Halva stjärnor ger en
+# mellanzon — och den är lagd där mätningen (172 flaggor) visar en trappa:
+#
+#   TREND   eff 0.40–0.55 → ½.  Uppmätt gradient: sidled -1.5%, mellan +0.8%,
+#           stark +3.9% (2026-08-30). Den tydligaste trappan vi har.
+#   OI      +2–4% → ½, ≥ +4% → hel. Slog BTC 36–40% av gångerna under +4%,
+#           58–61% över. Steget ligger vid 4%, inte vid 2% där hela stjärnan
+#           satt förut. OBS: OI har bytt tecken mellan mätningar tidigare.
+#   VOLYM   7–9× → ½, ≥ 9× → hel. INGEN uppmätt trappa: 6–7× slog BTC 55%,
+#           9–12× 53%. Halvstjärnan här tar bara bort klippkanten. Den börjar
+#           vid 7× och inte 6× eftersom 6× är kravet för att flaggan ska gå
+#           alls — en halvstjärna från 6× hade getts till varenda flagga.
+#   SLÄPAR  ingen halv. Mätt som ren uppdelning vid noll (+4.4% mot -0.4/-1.0%).
+TREND_HALF = 0.40
+OI_STAR_HALF, OI_STAR_FULL = 0.02, 0.04
+VOL_HALF = 7.0
+
 # --- Flaggans egen träffhistorik (visas i utskicket) -------------------------
 TRACK_DAYS = 45             # hur långt bak vi räknar
 TRACK_HORIZON_H = 48        # samma horisont som veckorapporten
@@ -128,23 +148,24 @@ def sort_key(s: dict) -> tuple:
     hamnade LINK först och AVAX tredje, fastän AVAX var det enda coinet som
     uppfyllde allt. Det översta coinet är det som läses.
 
-    Relativ styrka är tiebreaker, inte betyg: coins som SLÄPADE efter BTC vid
-    flaggan har gett +4.4% mot BTC efteråt (69% positiva, n=39), de som ledde
-    -0.4% till -1.0% (n=61). Det ska utvärderas 13 sep innan det får bli en
-    stjärna — sortering ändrar bara ordningen, inte betyget eller loggningen,
-    så mätserien påverkas inte.
+    Relativ styrka var tiebreaker från 3 sep och blev stjärna 13 sep: coins som
+    SLÄPADE efter BTC vid flaggan har gett +4.4% mot BTC efteråt (69% positiva,
+    n=39), de som ledde -0.4% till -1.0% (n=61).
 
-    Ordningen är: (1) uppfyllt volymkriteriet, (2) släpar efter BTC, (3) volym.
-    Trendstyrkan är samma för alla coins i ett utskick, så betygsskillnader
-    kommer bara från volymen — därför räcker den som första nyckel. Betyget
-    måste dominera över ett kriterium som ännu inte är poängsatt.
+    Ordningen är: (1) hela stjärnbetyget, (2) släpar efter BTC, (3) volym.
+    Trend utelämnas ur (1) — den är samma för alla coins i ett utskick. Fram
+    till 2026-09-23 var första nyckeln bara volymstjärnan, vilket kunde ställa
+    ett coin med tre stjärnor under ett med två. Listan ska stå i den ordning
+    stjärnorna säger. Släpandet kommer ändå före volym vid lika betyg, eftersom
+    det är den starkare av de två (+4.9 mot +1.1 procentenheter).
 
     Steg 2 är BINÄRT på tecknet, inte på råvärdet. Mätningen är en uppdelning
     vid noll (släpar +4.4% mot ledande -0.4 till -1.0%) utan glidande skala
     inom grupperna. Att sortera på råtalet hade låtsats om precision vi inte har.
     """
     rs = s.get("rs_btc")
-    return (0 if s["vol_ratio"] >= VOL_STRONG else 1,   # betyget först
+    poang = sum(p for p, _ in stjarnor_for(s, None))
+    return (-poang,                                     # betyget först
             0 if (rs is not None and rs < 0) else 1,    # sedan: släpar före leder
             -s["vol_ratio"])                            # sist: starkast volym
 
@@ -260,19 +281,14 @@ def trend_ord(eff) -> str:
         return "Marknadsläget är okänt"
     if eff >= STRONG_TREND:
         return "Marknaden går tydligt åt ett håll"
-    if eff >= 0.35:
-        return "Marknaden rör sig, men ryckigt"
+    if eff >= TREND_HALF:        # samma gräns som halvstjärnan, annars säger
+        return "Marknaden rör sig, men ryckigt"   # texten emot betyget
     return "Marknaden vandrar mest i sidled"
 
 
 def av_tio(andel: float) -> str:
     """0.63 -> "6 gånger av 10". Procent och n= är jargong; det här är inte det."""
     return f"{round(andel * 10)} gånger av 10"
-
-
-def _vol_txt(vol: float) -> str:
-    """Decimal bara nära tröskeln, så texten aldrig säger emot villkoret."""
-    return f"{vol:.1f}×" if abs(vol - VOL_STRONG) < 1 else f"{vol:.0f}×"
 
 
 def slapar_hitrate(track: dict) -> float | None:
@@ -285,6 +301,87 @@ def slapar_hitrate(track: dict) -> float | None:
     tot = [(a, n) for k, (_, a, n) in track.items() if k.endswith("/slapar")]
     n_tot = sum(n for _, n in tot)
     return sum(a * n for a, n in tot) / n_tot if n_tot else None
+
+
+def _ned(v: float) -> float:
+    """Avrunda NEDÅT till en decimal. 8.96 får inte stå som "9.0" bredvid en
+    halvstjärna som säger "hel från 9×" — det var exakt den motsägelsen
+    användaren reagerade på. Gränserna har en decimal, så nedrundat tal når
+    gränsen om och endast om det verkliga gör det."""
+    return math.floor(v * 10 + 1e-9) / 10
+
+
+def _x(v: float) -> str:
+    """Volymkvot med decimal nära stjärngränserna, annars motsäger texten betyget."""
+    nara = min(abs(v - VOL_STRONG), abs(v - VOL_HALF)) < 1
+    return f"{_ned(v):.1f}×" if nara else f"{v:.0f}×"
+
+
+def stjarnor_for(s: dict, eff) -> list:
+    """[(poäng 0 / 0.5 / 1, text)] för de fyra tecknen. Se halvstjärne-blocket.
+
+    Samma funktion används av betyget (confluence) och ordningen (sort_key), så
+    listan i utskicket alltid står i samma ordning som stjärnorna säger.
+    """
+    rs, oi, vol = s.get("rs_btc"), s.get("oi_chg"), s["vol_ratio"]
+    ut = []
+
+    if eff is None:
+        ut.append((0, "Marknadsläget är okänt"))
+    elif eff >= STRONG_TREND:
+        ut.append((1, trend_ord(eff)))
+    elif eff >= TREND_HALF:
+        ut.append((0.5, f"{trend_ord(eff)} (hel stjärna när den går tydligt åt ett håll)"))
+    else:
+        ut.append((0, trend_ord(eff)))
+
+    if rs is None:
+        ut.append((0, "Går inte att jämföra med marknaden"))
+    elif rs < 0:
+        ut.append((1, f"Har inte rusat i förväg — släpar {abs(rs)*100:.1f}% efter marknaden"))
+    else:
+        ut.append((0, f"Har redan rusat före marknaden — ligger {rs*100:.1f}% före"))
+
+    if vol >= VOL_STRONG:
+        ut.append((1, f"Volymen ovanligt hög — {_x(vol)} det normala"))
+    elif vol >= VOL_HALF:
+        ut.append((0.5, f"Volymen förhöjd — {_x(vol)} det normala "
+                        f"(hel stjärna från {VOL_STRONG:.0f}×)"))
+    else:
+        ut.append((0, f"Volymen {_x(vol)} det normala "
+                      f"(halv stjärna från {VOL_HALF:.0f}×)"))
+
+    if oi is None:
+        ut.append((0, "Derivatdata saknas för det här coinet"))
+    elif oi >= OI_STAR_FULL:
+        ut.append((1, f"Nya pengar i derivaten — OI {_pct(oi)}"))
+    elif oi >= OI_STAR_HALF:
+        ut.append((0.5, f"Lite nya pengar i derivaten — OI {_pct(oi)} "
+                        f"(hel stjärna från +{OI_STAR_FULL*100:.0f}%)"))
+    else:
+        ut.append((0, f"Inga nya pengar i derivaten — OI {_pct(oi)}"))
+    return ut
+
+
+def _pct(v: float) -> str:
+    """En decimal under 10% — "-0%" och "+2%" för 1.7% har lurat oss förut.
+    Nedrundad, så +1.97% inte står som "+2.0%" utan stjärna (se _ned)."""
+    return f"{_ned(v * 100):+.1f}%" if abs(v) < 0.10 else f"{v*100:+.0f}%"
+
+
+def stjarnrad(n: float, av: int) -> str:
+    """2.5 av 4 -> "⭐⭐½☆". Det finns ingen halvstjärne-emoji som syns överallt."""
+    hela = int(n)
+    halv = (n - hela) >= 0.5
+    return "⭐" * hela + ("½" if halv else "") + "☆" * (av - hela - (1 if halv else 0))
+
+
+def betyg_txt(n: float, av: int) -> str:
+    """2.5 -> "2½/4", 0.5 -> "½/4"."""
+    hela = int(n)
+    if (n - hela) < 0.5:
+        return f"{hela}/{av}"
+    return f"{hela or ''}½/{av}"
 
 
 def confluence(s: dict, regime: dict, track: dict, visade: set | None = None) -> tuple:
@@ -308,34 +405,11 @@ def confluence(s: dict, regime: dict, track: dict, visade: set | None = None) ->
     Ingen siffra som bara en kvant förstår får stå här. "eff 0.22" och "n=30"
     var obegripliga för användaren; det är hans verktyg, så de är översatta.
     """
-    eff = regime.get("eff")
-    rs = s.get("rs_btc")
-    oi = s.get("oi_chg")
-    vol = s["vol_ratio"]
-
-    checks = [
-        (eff is not None and eff >= STRONG_TREND,
-         trend_ord(eff),
-         "Marknaden går inte tydligt åt något håll"),
-        (rs is not None and rs < 0,
-         f"Har inte rusat i förväg — släpar {abs(rs)*100:.1f}% efter marknaden"
-         if rs is not None and rs < 0 else "",
-         f"Har redan rusat före marknaden — ligger {rs*100:.1f}% före"
-         if rs is not None else "Går inte att jämföra med marknaden"),
-        # En decimal nära tröskeln, annars motsäger texten sig själv: 8.96×
-        # skrevs "9×" och underkändes i samma mening (samma fel som OI hade).
-        (vol >= VOL_STRONG,
-         f"Volymen ovanligt hög — {_vol_txt(vol)} det normala",
-         f"Volymen {_vol_txt(vol)} det normala, under {VOL_STRONG:.0f}×"),
-        (oi is not None and oi >= OI_THRESHOLD,
-         f"Nya pengar i derivaten — OI {oi*100:+.0f}%" if oi is not None else "",
-         f"Inga nya pengar i derivaten — OI {oi*100:+.1f}%"
-         if oi is not None else "Derivatdata saknas för det här coinet"),
-    ]
-
-    n = sum(1 for ok, _, _ in checks if ok)
-    stars = "⭐" * n + "☆" * (len(checks) - n)
-    rows = [f"      {'✅' if ok else '❌'} {ja if ok else nej}" for ok, ja, nej in checks]
+    eff, rs = regime.get("eff"), s.get("rs_btc")
+    delar = stjarnor_for(s, eff)
+    n = sum(p for p, _ in delar)
+    stars = stjarnrad(n, len(delar))
+    rows = [f"      {'✅' if p == 1 else '◐' if p == 0.5 else '❌'} {txt}" for p, txt in delar]
 
     # Historikraden är samma för alla coins i samma grupp — skriv den en gång
     # per utskick i stället för att upprepa identisk text sex gånger.
@@ -558,7 +632,7 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
             rs_txt = f" · vs BTC {rs*100:+.0f}%" if rs is not None else ""
             if k == "turning_up":
                 stars, n, rows = confluence(s, regime, track, visade_grupper)
-                L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {n}/4")
+                L.append(f"  • <b>{s['sym']}</b> ~{s['price']:g} — {stars} {betyg_txt(n, 4)}")
                 L.extend(rows)
                 L.append(rs_line(s))
                 fl = funding_line(funding.get(s["sym"]))
@@ -576,17 +650,18 @@ def run(conn, timeframe: str = "1h", send: bool = True) -> None:
             # vara längre än innehållet. Historiken bakom (varför fyra stjärnor
             # blev två) hör hemma i CLAUDE.md, inte i din telefon varje timme.
             L.append("  <i>↳ ⭐ = fyra tecken, mätta mot systemets egna tidigare "
-                     "flaggor. Starkast är att marknaden går åt ett håll, näst "
-                     "starkast att coinet inte redan rusat. Volym och OI väger "
-                     "lättare — OI är svagast av alla och har bytt riktning mellan "
-                     "mätningar, så läs den som en ledtråd, inte ett besked.</i>")
+                     "flaggor; ◐ = halv stjärna, nära gränsen. Starkast är att "
+                     "marknaden går åt ett håll, näst starkast att coinet inte redan "
+                     "rusat. Volym och OI väger lättare — volym har ingen uppmätt "
+                     "skillnad alls just nu, och OI har bytt riktning mellan "
+                     "mätningar. Läs dem som ledtrådar, inte besked.</i>")
             # Tolkningen är kontraintuitiv nog att behöva stå utskriven: att
             # SLÄPA är det gynnsamma läget. Ingen gissar det av sig själv.
             hr = slapar_hitrate(track)
             if hr is not None and any(s.get("rs_btc") is not None for s in sent[k][:6]):
                 L.append(f"  <i>↳ Att ett coin <b>släpar efter</b> marknaden är bra, inte "
                          f"dåligt: såna har slagit marknaden {av_tio(hr)}, medan de som "
-                         f"redan rusat gått sämre. Listan har dem överst.</i>")
+                         f"redan rusat gått sämre. Därför ger det en hel stjärna.</i>")
     if owned:
         L.append(f"\n<i>({', '.join(owned)} flaggades också men du äger dem redan — "
                  f"de bevakas av exit-vakten.)</i>")
